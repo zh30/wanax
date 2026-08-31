@@ -1,0 +1,19 @@
+[package]
+name = "wanax-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Worker adapters (octoscode + fake)"
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+toml.workspace = true
+tokio.workspace = true
+which.workspace = true
+wanax-core.workspace = true
+wanax-verify.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

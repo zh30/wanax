@@ -1,0 +1,13 @@
+[package]
+name = "wanax-git"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Git CLI wrapper for Wanax isolation and commits"
+
+[dependencies]
+wanax-core.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
