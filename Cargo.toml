@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/wanax-cli",
+    "crates/wanax-core",
+    "crates/wanax-git",
+    "crates/wanax-llm",
+    "crates/wanax-tombstone",
+    "crates/wanax-verify",
+    "crates/wanax-worker",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Henry Zhang"]
+repository = "https://github.com/henry/wanax"
+
+[workspace.dependencies]
+wanax-core = { path = "crates/wanax-core" }
+wanax-git = { path = "crates/wanax-git" }
+wanax-llm = { path = "crates/wanax-llm" }
+wanax-tombstone = { path = "crates/wanax-tombstone" }
+wanax-verify = { path = "crates/wanax-verify" }
+wanax-worker = { path = "crates/wanax-worker" }
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+clap = { version = "4.5", features = ["derive"] }
+fs2 = "0.4"
+hex = "0.4"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time", "io-util", "fs", "signal"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+ulid = { version = "1", features = ["serde"] }
+which = "7"
+globset = "0.4"
+async-trait = "0.1"
+tempfile = "3"
