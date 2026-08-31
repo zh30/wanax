@@ -37,6 +37,24 @@ pub fn budget_error(run: &FactoryRun) -> WanaxError {
     )
 }
 
+pub fn charge_units(
+    run: &mut FactoryRun,
+    units_in: u64,
+    units_out: u64,
+    usd_per_million_in: i64,
+    usd_per_million_out: i64,
+    cost_estimated: bool,
+) -> BudgetTick {
+    let add = estimate_cost_micros(units_in, units_out, usd_per_million_in, usd_per_million_out);
+    run.spent_usd_micros = run.spent_usd_micros.saturating_add(add);
+    BudgetTick {
+        spent_usd_micros: run.spent_usd_micros,
+        spent_inner_turns: run.spent_inner_turns,
+        cost_estimated,
+        exhausted: is_budget_exhausted(run),
+    }
+}
+
 pub fn charge_estimated(
     run: &mut FactoryRun,
     chars_in: u64,
@@ -44,14 +62,14 @@ pub fn charge_estimated(
     usd_per_million_in: i64,
     usd_per_million_out: i64,
 ) -> BudgetTick {
-    let add = estimate_cost_micros(chars_in, chars_out, usd_per_million_in, usd_per_million_out);
-    run.spent_usd_micros = run.spent_usd_micros.saturating_add(add);
-    BudgetTick {
-        spent_usd_micros: run.spent_usd_micros,
-        spent_inner_turns: run.spent_inner_turns,
-        cost_estimated: true,
-        exhausted: is_budget_exhausted(run),
-    }
+    charge_units(
+        run,
+        chars_in,
+        chars_out,
+        usd_per_million_in,
+        usd_per_million_out,
+        true,
+    )
 }
 
 pub fn add_turns(run: &mut FactoryRun, n: u32) -> BudgetTick {
@@ -110,5 +128,15 @@ mod tests {
         let mut r39 = run(5_000_000, 40);
         add_turns(&mut r39, 39);
         assert!(!is_turns_exhausted(&r39));
+    }
+
+    #[test]
+    fn charge_units_marks_estimated() {
+        let mut r = run(5_000_000, 40);
+        let estimated = charge_units(&mut r, 1_000_000, 0, 10_000_000, 50_000_000, true);
+        assert!(estimated.cost_estimated);
+        assert_eq!(estimated.spent_usd_micros, 10_000_000);
+        let real = charge_units(&mut r, 10, 0, 10_000_000, 50_000_000, false);
+        assert!(!real.cost_estimated);
     }
 }

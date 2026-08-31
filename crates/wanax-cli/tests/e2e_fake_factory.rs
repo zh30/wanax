@@ -376,6 +376,17 @@ fn happy_path_fake_accepts() {
         .join("RESULT.md")
         .is_file());
     assert!(!h.path().join(".wanax/LOCK").exists());
+    let reviews: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "state_changed" && e["payload"]["phase"] == "self_review")
+        .collect();
+    assert!(!reviews.is_empty(), "{events:?}");
+    assert!(reviews
+        .iter()
+        .all(|e| e["payload"]["self_review"] == "degraded"));
+    assert!(events
+        .iter()
+        .any(|e| e["kind"] == "budget_tick" && e["payload"]["cost_estimated"] == true));
 }
 
 #[test]
@@ -738,6 +749,100 @@ fn walk(dir: &Path, hits: &mut Vec<String>) {
             }
         }
     }
+}
+
+fn write_openai_cassette(dir: &Path, dispatch_instruction: &str) {
+    let dispatch = serde_json::json!({
+        "title": "add-fn",
+        "instruction": dispatch_instruction,
+    })
+    .to_string();
+    let verdict = serde_json::json!({
+        "decision": "accept",
+        "reason": "outer gates look fine",
+        "files_reviewed": ["src/lib.rs"]
+    })
+    .to_string();
+    let cassette = serde_json::json!({
+        "provider": "openai",
+        "calls": [
+            {
+                "body": {
+                    "choices": [{"message": {"content": dispatch}}],
+                    "usage": {"prompt_tokens": 21, "completion_tokens": 14}
+                }
+            },
+            {
+                "body": {
+                    "choices": [{"message": {"content": verdict}}],
+                    "usage": {"prompt_tokens": 18, "completion_tokens": 9}
+                }
+            }
+        ]
+    });
+    fs::write(dir.join("cassette.json"), cassette.to_string()).unwrap();
+}
+
+#[test]
+fn llm_fixture_accepts_and_records_usage() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t = t.replace(
+        "# empty model degrades self-review (Phase 2)\n",
+        "model = \"inner\"\n",
+    );
+    fs::write(&p, t).unwrap();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let cassette_dir = h.data.path().join("llm-cassette");
+    fs::create_dir_all(&cassette_dir).unwrap();
+    write_openai_cassette(
+        &cassette_dir,
+        "Implement add in src/lib.rs. Allowed: src/**. Forbidden: **/.env. test_command: cargo test. CC-01: cargo test exits 0",
+    );
+    let out = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_LLM_FIXTURE_DIR", &cassette_dir)
+        .env_remove("WANAX_COMMANDER_SCRIPT")
+        .env_remove("WANAX_COMMANDER_API_KEY")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout} stderr={stderr}");
+    assert!(stdout.contains("state=accepted"), "{stdout}");
+    let env = h.envelope();
+    assert_eq!(env["current_state"], "accepted");
+    let events = env["events"].as_array().unwrap();
+    let reviews: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "state_changed" && e["payload"]["phase"] == "self_review")
+        .collect();
+    assert!(!reviews.is_empty(), "{events:?}");
+    assert!(reviews
+        .iter()
+        .all(|e| e["payload"]["self_review"] == "degraded"));
+    let ticks: Vec<&Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "budget_tick")
+        .collect();
+    assert!(ticks.iter().any(|e| e["payload"]["cost_estimated"] == false
+        && e["payload"]["prompt_tokens"] == 21
+        && e["payload"]["completion_tokens"] == 14));
+    assert!(ticks.iter().any(|e| e["payload"]["cost_estimated"] == false
+        && e["payload"]["prompt_tokens"] == 18
+        && e["payload"]["completion_tokens"] == 9));
 }
 
 fn find_file(root: &Path, name: &str) -> Option<PathBuf> {

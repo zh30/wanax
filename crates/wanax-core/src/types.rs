@@ -315,6 +315,7 @@ pub struct Verdict {
 }
 
 pub const MAX_REWORK: u32 = 3;
+pub const MAX_GOAL_ITERS: u32 = 8;
 pub const CANCEL_TIMEOUT_SECS: u64 = 20;
 pub const DEFAULT_MAX_USD_MICROS: i64 = 5_000_000;
 pub const DEFAULT_MAX_INNER_TURNS: u32 = 40;

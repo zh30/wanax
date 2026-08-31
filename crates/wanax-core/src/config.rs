@@ -32,6 +32,8 @@ pub struct CommanderConfig {
     pub provider: String,
     #[serde(default = "default_commander_model")]
     pub model: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 impl Default for CommanderConfig {
@@ -39,6 +41,7 @@ impl Default for CommanderConfig {
         Self {
             provider: default_provider(),
             model: default_commander_model(),
+            base_url: None,
         }
     }
 }
@@ -49,6 +52,8 @@ pub struct InnerConfig {
     pub provider: String,
     #[serde(default = "default_inner_model")]
     pub model: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 impl Default for InnerConfig {
@@ -56,6 +61,7 @@ impl Default for InnerConfig {
         Self {
             provider: default_provider(),
             model: default_inner_model(),
+            base_url: None,
         }
     }
 }

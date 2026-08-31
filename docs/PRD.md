@@ -945,9 +945,9 @@ v1 不做产品分析埋点。
 
 ### Phase 2
 
-- [ ] 真实 LLM fixture 可跑通一次 accept
-- [ ] 自审模型与实现模型相同 → self_review=degraded
-- [ ] 成本估算或真实 usage 写入墓碑
+- [x] 真实 LLM fixture 可跑通一次 accept
+- [x] 自审模型与实现模型相同 → self_review=degraded
+- [x] 成本估算或真实 usage 写入墓碑
 
 ### Phase 3
 
