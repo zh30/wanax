@@ -165,6 +165,7 @@ pub fn load_fake_spec(worktree_or_repo: &Path) -> FakeSpec {
 
 pub struct FakeAdapter {
     pub rework_count: u32,
+    pub goal_iter: u32,
     pub spec_path: Option<PathBuf>,
 }
 
@@ -172,8 +173,14 @@ impl FakeAdapter {
     pub fn new(rework_count: u32) -> Self {
         Self {
             rework_count,
+            goal_iter: 1,
             spec_path: None,
         }
+    }
+
+    fn attempt_index(&self) -> usize {
+        self.rework_count
+            .saturating_add(self.goal_iter.saturating_sub(1)) as usize
     }
 }
 
@@ -188,7 +195,7 @@ impl WorkerAdapter for FakeAdapter {
         } else {
             load_fake_spec(&ctx.worktree)
         };
-        let attempt = spec.attempts.get(self.rework_count as usize).cloned();
+        let attempt = spec.attempts.get(self.attempt_index()).cloned();
         let writes = attempt
             .as_ref()
             .map(|a| a.writes.clone())

@@ -3,7 +3,7 @@ use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use wanax_core::accept::{enforce_decision, AcceptGates};
-use wanax_core::budget::{add_turns, budget_error, charge_estimated, is_budget_exhausted};
+use wanax_core::budget::{add_turns, budget_error, charge_units, is_budget_exhausted};
 use wanax_core::config::load_merged_config;
 use wanax_core::contract::parse_contract_file;
 use wanax_core::error::{ErrorCode, WanaxError};
@@ -13,7 +13,8 @@ use wanax_core::lock::RepoLock;
 use wanax_core::timeutil::now_rfc3339;
 use wanax_core::types::{
     inner_branch_name, outer_branch_name, AssigneeRole, Contract, FactoryRun, Receipt, RunState,
-    Verdict, VerdictDecision, WorkUnit, WorkUnitState, WorkerAdapterKind, MAX_REWORK,
+    Verdict, VerdictDecision, WorkUnit, WorkUnitState, WorkerAdapterKind, MAX_GOAL_ITERS,
+    MAX_REWORK,
 };
 use wanax_core::{ResolvedConfig, Store};
 use wanax_git::{
@@ -22,8 +23,8 @@ use wanax_git::{
     worktree_add_branch, worktree_add_detach,
 };
 use wanax_llm::{
-    dispatch_with_retry, Commander, DispatchContext, MechanicalCommander, ScriptedCommander,
-    VerdictContext,
+    dispatch_with_retry, pick_commander, pick_review_client, run_self_review, Commander,
+    DispatchContext, LlmUsage, VerdictContext,
 };
 use wanax_tombstone::{
     append_event, init_envelope, make_event, persist_envelope, run_dir, Actor, EventKind,
@@ -187,11 +188,8 @@ async fn run_factory(
         .await?;
     println!("state={}", run.state.as_str());
 
-    let commander: Box<dyn Commander> = if let Some(scripted) = ScriptedCommander::from_env() {
-        Box::new(scripted)
-    } else {
-        Box::new(MechanicalCommander::new(run.commander_model.clone()))
-    };
+    let commander: Box<dyn Commander> = pick_commander(cfg)?;
+    let review_client = pick_review_client(cfg);
 
     let mut unit: Option<WorkUnit> = None;
     let mut rework_notes: Option<String> = None;
@@ -220,8 +218,7 @@ async fn run_factory(
             store,
             repo,
             &mut run,
-            draft.1.chars_in,
-            draft.1.chars_out,
+            &draft.1,
             cfg.commander_in_micros,
             cfg.commander_out_micros,
         )
@@ -246,7 +243,7 @@ async fn run_factory(
                     title: draft.0.title,
                     instruction: draft.0.instruction,
                     state: WorkUnitState::Assigned,
-                    assignee_role: AssigneeRole::Master,
+                    assignee_role: AssigneeRole::Goal,
                     parent_id: None,
                     rework_count: 0,
                     inner_commit_sha: None,
@@ -282,57 +279,36 @@ async fn run_factory(
         fs::write(&wu_path, &u.instruction)
             .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
 
-        let ctx = WorkerContext {
-            run_id: run.id.clone(),
-            work_unit_id: u.id.clone(),
-            test_command: contract.test_command.clone(),
-            test_timeout_secs: contract.test_timeout_secs,
-            worktree: inner_wt.clone(),
-            instruction: u.instruction.clone(),
-            adapter_name: adapter_kind.as_str().to_string(),
-            extra_path: Some(wrapper_dir.clone()),
-            timeout_secs: cfg.file.worker.timeout_secs,
-        };
+        if let Some(existing) = unit.as_mut() {
+            existing.assignee_role = AssigneeRole::Goal;
+            existing.state = WorkUnitState::Implementing;
+            store.update_work_unit(existing).await?;
+        }
 
         run.worker_pid = Some(i64::from(std::process::id()));
         store.save_run_progress(&run).await?;
         println!("starting worker pid={}", std::process::id());
 
         let spec_path = inner_wt.join(".wanax").join("fake.toml");
-        let handle = match adapter_kind {
-            WorkerAdapterKind::Fake => {
-                let mut fake = FakeAdapter::new(u.rework_count);
-                if spec_path.is_file() {
-                    fake.spec_path = Some(spec_path);
-                }
-                fake.start(&ctx).await
-            }
-            WorkerAdapterKind::Octoscode => {
-                OctoscodeAdapter::new(&cfg.file.worker.octoscode_bin)
-                    .start(&ctx)
-                    .await
-            }
-            _ => {
-                return Err(WanaxError::new(
-                    ErrorCode::AdapterMissing,
-                    format!("adapter binary not found: {}", adapter_kind.as_str()),
-                ));
-            }
-        };
-
-        let handle = match handle {
+        let handle = match run_goal_loop(GoalLoopParams {
+            store,
+            repo,
+            run: &mut run,
+            contract: &contract,
+            cfg,
+            inner_wt: &inner_wt,
+            adapter_kind,
+            spec_path: &spec_path,
+            wrapper_dir: &wrapper_dir,
+            unit: &u,
+            review_client: review_client.as_deref(),
+        })
+        .await
+        {
             Ok(h) => h,
-            Err(e) if e.code == ErrorCode::WorkerTimeout => {
-                break fail_run(store, repo, &mut run, e).await;
-            }
-            Err(e) if e.code == ErrorCode::WorkerCrash => {
-                break fail_run(store, repo, &mut run, e).await;
-            }
             Err(e) => break fail_run(store, repo, &mut run, e).await,
         };
 
-        add_turns(&mut run, handle.turns);
-        store.save_run_progress(&run).await?;
         if run.spent_inner_turns >= run.max_inner_turns && handle.crashed {
             break fail_budget(store, repo, &mut run).await;
         }
@@ -503,8 +479,7 @@ async fn run_factory(
             store,
             repo,
             &mut run,
-            usage.chars_in,
-            usage.chars_out,
+            &usage,
             cfg.commander_in_micros,
             cfg.commander_out_micros,
         )
@@ -662,30 +637,186 @@ async fn run_factory(
     outcome
 }
 
+struct GoalLoopParams<'a> {
+    store: &'a Store,
+    repo: &'a Path,
+    run: &'a mut FactoryRun,
+    contract: &'a Contract,
+    cfg: &'a ResolvedConfig,
+    inner_wt: &'a Path,
+    adapter_kind: WorkerAdapterKind,
+    spec_path: &'a Path,
+    wrapper_dir: &'a Path,
+    unit: &'a WorkUnit,
+    review_client: Option<&'a dyn wanax_llm::CompletionClient>,
+}
+
+async fn run_goal_loop(
+    params: GoalLoopParams<'_>,
+) -> Result<wanax_worker::WorkerHandle, WanaxError> {
+    let GoalLoopParams {
+        store,
+        repo,
+        run,
+        contract,
+        cfg,
+        inner_wt,
+        adapter_kind,
+        spec_path,
+        wrapper_dir,
+        unit,
+        review_client,
+    } = params;
+    let ctx = WorkerContext {
+        run_id: run.id.clone(),
+        work_unit_id: unit.id.clone(),
+        test_command: contract.test_command.clone(),
+        test_timeout_secs: contract.test_timeout_secs,
+        worktree: inner_wt.to_path_buf(),
+        instruction: unit.instruction.clone(),
+        adapter_name: adapter_kind.as_str().to_string(),
+        extra_path: Some(wrapper_dir.to_path_buf()),
+        timeout_secs: cfg.file.worker.timeout_secs,
+    };
+    let mut last_handle = None;
+    for iter in 1..=MAX_GOAL_ITERS {
+        if is_budget_exhausted(run) {
+            break;
+        }
+        let _ = append_event(
+            repo,
+            &run.id,
+            "inner_working",
+            make_event(
+                Actor::Goal,
+                EventKind::StateChanged,
+                json!({ "phase": "plan", "iter": iter }),
+            ),
+        );
+        let handle =
+            start_adapter(adapter_kind, cfg, &ctx, spec_path, unit.rework_count, iter).await?;
+        add_turns(run, handle.turns);
+        store.save_run_progress(run).await?;
+        if handle.crashed {
+            return Ok(handle);
+        }
+
+        let test = run_test_command(inner_wt, &contract.test_command, contract.test_timeout_secs)?;
+        let inner_code = if test.timed_out { 124 } else { test.exit_code };
+        let mut handle = handle;
+        handle.test_exit_code = inner_code;
+        handle.test_excerpt = test.excerpt.clone();
+
+        let changed: Vec<String> = status_paths(inner_wt)?
+            .into_iter()
+            .filter(|p| {
+                !p.starts_with(".wanax/")
+                    && !p.starts_with(".wanax-bin/")
+                    && !p.starts_with("target/")
+                    && p != "WORK_UNIT.md"
+                    && p != "Cargo.lock"
+            })
+            .collect();
+        let review = run_self_review(
+            run.reviewer_model.as_deref(),
+            &run.inner_model,
+            review_client,
+            &changed,
+            inner_code,
+            &test.excerpt,
+        )
+        .await;
+        if let Some(usage) = &review.usage {
+            charge_and_tick(
+                store,
+                repo,
+                run,
+                usage,
+                cfg.inner_in_micros,
+                cfg.inner_out_micros,
+            )
+            .await?;
+        }
+        let _ = append_event(
+            repo,
+            &run.id,
+            "inner_working",
+            make_event(
+                Actor::Goal,
+                EventKind::StateChanged,
+                json!({
+                    "phase": "self_review",
+                    "iter": iter,
+                    "self_review": if review.degraded { "degraded" } else { "semantic" },
+                    "mode": review.mode,
+                    "test_exit_code": inner_code,
+                }),
+            ),
+        );
+        last_handle = Some(handle);
+        if inner_code == 0 || is_budget_exhausted(run) {
+            break;
+        }
+    }
+    last_handle.ok_or_else(|| WanaxError::from_code(ErrorCode::WorkerCrash))
+}
+
+async fn start_adapter(
+    adapter_kind: WorkerAdapterKind,
+    cfg: &ResolvedConfig,
+    ctx: &WorkerContext,
+    spec_path: &Path,
+    rework_count: u32,
+    goal_iter: u32,
+) -> Result<wanax_worker::WorkerHandle, WanaxError> {
+    match adapter_kind {
+        WorkerAdapterKind::Fake => {
+            let mut fake = FakeAdapter::new(rework_count);
+            fake.goal_iter = goal_iter;
+            if spec_path.is_file() {
+                fake.spec_path = Some(spec_path.to_path_buf());
+            }
+            fake.start(ctx).await
+        }
+        WorkerAdapterKind::Octoscode => {
+            OctoscodeAdapter::new(&cfg.file.worker.octoscode_bin)
+                .start(ctx)
+                .await
+        }
+        _ => Err(WanaxError::new(
+            ErrorCode::AdapterMissing,
+            format!("adapter binary not found: {}", adapter_kind.as_str()),
+        )),
+    }
+}
+
 async fn charge_and_tick(
     store: &Store,
     repo: &Path,
     run: &mut FactoryRun,
-    chars_in: u64,
-    chars_out: u64,
+    usage: &LlmUsage,
     rate_in: i64,
     rate_out: i64,
 ) -> Result<(), WanaxError> {
-    let tick = charge_estimated(run, chars_in, chars_out, rate_in, rate_out);
+    let (units_in, units_out, estimated) = usage.charge_units();
+    let tick = charge_units(run, units_in, units_out, rate_in, rate_out, estimated);
     store.save_run_progress(run).await?;
+    let mut payload = json!({
+        "spent_usd_micros": tick.spent_usd_micros,
+        "spent_inner_turns": tick.spent_inner_turns,
+        "cost_estimated": tick.cost_estimated,
+    });
+    if let Some(tokens) = usage.prompt_tokens {
+        payload["prompt_tokens"] = json!(tokens);
+    }
+    if let Some(tokens) = usage.completion_tokens {
+        payload["completion_tokens"] = json!(tokens);
+    }
     let _ = append_event(
         repo,
         &run.id,
         run.state.as_str(),
-        make_event(
-            Actor::System,
-            EventKind::BudgetTick,
-            json!({
-                "spent_usd_micros": tick.spent_usd_micros,
-                "spent_inner_turns": tick.spent_inner_turns,
-                "cost_estimated": tick.cost_estimated,
-            }),
-        ),
+        make_event(Actor::System, EventKind::BudgetTick, payload),
     );
     Ok(())
 }

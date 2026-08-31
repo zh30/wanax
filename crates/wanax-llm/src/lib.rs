@@ -1,7 +1,24 @@
+mod goal;
+mod http;
+mod jsonutil;
+mod provider;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use wanax_core::config::ResolvedConfig;
 use wanax_core::error::{ErrorCode, WanaxError};
 use wanax_core::types::{Contract, Receipt, VerdictDecision, WorkUnit};
+
+pub use goal::{
+    mechanical_self_review, pick_review_client, run_self_review, self_review_degraded,
+    GoalSelfReview,
+};
+pub use http::HttpCommander;
+pub use provider::{
+    parse_anthropic_body, parse_openai_body, Completion, CompletionClient, FixtureClient,
+    LiveClient, ProviderKind,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkUnitDraft {
@@ -35,11 +52,43 @@ pub struct VerdictContext {
     pub rework_count: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LlmUsage {
     pub chars_in: u64,
     pub chars_out: u64,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
     pub raw_json: String,
+}
+
+impl LlmUsage {
+    /// Returns (units_in, units_out, cost_estimated).
+    /// Provider tokens win when both sides are present; otherwise chars × config rates.
+    pub fn charge_units(&self) -> (u64, u64, bool) {
+        match (self.prompt_tokens, self.completion_tokens) {
+            (Some(units_in), Some(units_out)) => (units_in, units_out, false),
+            _ => (self.chars_in, self.chars_out, true),
+        }
+    }
+}
+
+pub fn pick_commander(cfg: &ResolvedConfig) -> Result<Box<dyn Commander>, WanaxError> {
+    let model = cfg.file.commander.model.clone();
+    if let Some(scripted) = ScriptedCommander::from_env() {
+        return Ok(Box::new(scripted));
+    }
+    if let Ok(dir) = std::env::var("WANAX_LLM_FIXTURE_DIR") {
+        let client = FixtureClient::load_dir(std::path::Path::new(&dir))?;
+        return Ok(Box::new(HttpCommander::new(Arc::new(client), model)));
+    }
+    if let Ok(key) = std::env::var("WANAX_COMMANDER_API_KEY") {
+        if !key.is_empty() {
+            let kind = ProviderKind::parse(&cfg.file.commander.provider)?;
+            let client = LiveClient::new(kind, key, cfg.file.commander.base_url.clone())?;
+            return Ok(Box::new(HttpCommander::new(Arc::new(client), model)));
+        }
+    }
+    Ok(Box::new(MechanicalCommander::new(model)))
 }
 
 #[async_trait]
@@ -51,7 +100,7 @@ pub trait Commander: Send + Sync {
     async fn verdict(&self, ctx: &VerdictContext) -> Result<(VerdictDraft, LlmUsage), WanaxError>;
 }
 
-/// Phase 1 commander: deterministic JSON, no network. Phase 2 replaces this with providers.
+/// Deterministic commander used when no fixture or API key is configured.
 pub struct MechanicalCommander {
     pub model: String,
 }
@@ -62,34 +111,34 @@ impl MechanicalCommander {
             model: model.into(),
         }
     }
+}
 
-    fn instruction(ctx: &DispatchContext) -> String {
-        let c = &ctx.contract;
-        let mut s = String::new();
-        s.push_str("# Work unit\n\n");
-        s.push_str("## Intent\n\n");
-        s.push_str(&c.intent);
-        s.push_str("\n\n## Decisions\n\n");
-        for d in &c.decisions {
-            s.push_str(&format!("- {d}\n"));
-        }
-        s.push_str("\n## Boundaries\n\nAllowed: ");
-        s.push_str(&c.allowed_globs.join(", "));
-        s.push_str("\nForbidden: ");
-        s.push_str(&c.forbidden_globs.join(", "));
-        s.push_str("\n\n## Test command\n\n");
-        s.push_str(&c.test_command);
-        s.push_str("\n\n## Completion criteria\n\n");
-        for cc in &c.completion_criteria {
-            s.push_str(&format!("- {}: {}\n", cc.id, cc.statement));
-        }
-        if let Some(notes) = &ctx.rework_notes {
-            s.push_str("\n## Rework notes\n\n");
-            s.push_str(notes);
-            s.push('\n');
-        }
-        s
+pub fn format_dispatch_instruction(ctx: &DispatchContext) -> String {
+    let c = &ctx.contract;
+    let mut s = String::new();
+    s.push_str("# Work unit\n\n");
+    s.push_str("## Intent\n\n");
+    s.push_str(&c.intent);
+    s.push_str("\n\n## Decisions\n\n");
+    for d in &c.decisions {
+        s.push_str(&format!("- {d}\n"));
     }
+    s.push_str("\n## Boundaries\n\nAllowed: ");
+    s.push_str(&c.allowed_globs.join(", "));
+    s.push_str("\nForbidden: ");
+    s.push_str(&c.forbidden_globs.join(", "));
+    s.push_str("\n\n## Test command\n\n");
+    s.push_str(&c.test_command);
+    s.push_str("\n\n## Completion criteria\n\n");
+    for cc in &c.completion_criteria {
+        s.push_str(&format!("- {}: {}\n", cc.id, cc.statement));
+    }
+    if let Some(notes) = &ctx.rework_notes {
+        s.push_str("\n## Rework notes\n\n");
+        s.push_str(notes);
+        s.push('\n');
+    }
+    s
 }
 
 #[async_trait]
@@ -103,12 +152,14 @@ impl Commander for MechanicalCommander {
             .name
             .clone()
             .unwrap_or_else(|| truncate(&ctx.contract.intent, 120));
-        let instruction = Self::instruction(ctx);
+        let instruction = format_dispatch_instruction(ctx);
         let draft = WorkUnitDraft { title, instruction };
         let raw = serde_json::to_string(&draft).unwrap_or_else(|_| "{}".into());
         let usage = LlmUsage {
             chars_in: ctx.contract.intent.len() as u64,
             chars_out: raw.len() as u64,
+            prompt_tokens: None,
+            completion_tokens: None,
             raw_json: raw,
         };
         Ok((draft, usage))
@@ -143,6 +194,8 @@ impl Commander for MechanicalCommander {
         let usage = LlmUsage {
             chars_in: ctx.diffstat.len() as u64 + ctx.outer_test_excerpt.len() as u64,
             chars_out: raw.len() as u64,
+            prompt_tokens: None,
+            completion_tokens: None,
             raw_json: raw,
         };
         Ok((draft, usage))
@@ -217,6 +270,8 @@ pub fn parse_dispatch(raw: &str) -> Result<(WorkUnitDraft, LlmUsage), WanaxError
         LlmUsage {
             chars_in: 0,
             chars_out: raw.len() as u64,
+            prompt_tokens: None,
+            completion_tokens: None,
             raw_json: raw.to_string(),
         },
     ))
@@ -233,6 +288,8 @@ pub fn parse_verdict(raw: &str) -> Result<(VerdictDraft, LlmUsage), WanaxError> 
         LlmUsage {
             chars_in: 0,
             chars_out: raw.len() as u64,
+            prompt_tokens: None,
+            completion_tokens: None,
             raw_json: raw.to_string(),
         },
     ))
@@ -277,7 +334,7 @@ pub fn work_unit_from_draft(run_id: &str, seq: u32, draft: WorkUnitDraft) -> Wor
         title: draft.title,
         instruction: draft.instruction,
         state: wanax_core::WorkUnitState::Queued,
-        assignee_role: wanax_core::AssigneeRole::Master,
+        assignee_role: wanax_core::AssigneeRole::Goal,
         parent_id: None,
         rework_count: 0,
         inner_commit_sha: None,
