@@ -81,7 +81,7 @@ const GOOD_LIB: &str = "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\n#[cfg(tes
 
 fn fake_toml_good() -> String {
     format!(
-        "turns = 1\nrun_tests = true\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}'''\n"
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}'''\n"
     )
 }
 
@@ -95,7 +95,7 @@ fn fake_toml_bad() -> String {
 
 fn fake_toml_boundary() -> String {
     format!(
-        "turns = 1\nrun_tests = true\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}'''\n\n[[writes]]\npath = \"Cargo.toml\"\ncontent = '''[package]\nname = \"fixture\"\nversion = \"0.2.0\"\nedition = \"2021\"\n'''\n"
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}'''\n\n[[writes]]\npath = \"Cargo.toml\"\ncontent = '''[package]\nname = \"fixture\"\nversion = \"0.2.0\"\nedition = \"2021\"\n'''\n"
     )
 }
 
@@ -166,6 +166,20 @@ impl Harness {
         let p = self.path().join(".wanax/config.toml");
         let mut t = fs::read_to_string(&p).unwrap();
         t = t.replace("adapter = \"octoscode\"", "adapter = \"fake\"");
+        fs::write(&p, t).unwrap();
+    }
+
+    fn set_adapter_cmd(&self, cmd: &Path) {
+        let p = self.path().join(".wanax/config.toml");
+        let mut t = fs::read_to_string(&p).unwrap();
+        t = t.replace("adapter = \"octoscode\"", "adapter = \"cmd\"");
+        t = t.replace(
+            "octoscode_bin = \"octoscode\"",
+            &format!(
+                "octoscode_bin = \"octoscode\"\ncmd = \"{}\"\ncmd_args = []",
+                cmd.display()
+            ),
+        );
         fs::write(&p, t).unwrap();
     }
 
@@ -843,6 +857,120 @@ fn llm_fixture_accepts_and_records_usage() {
     assert!(ticks.iter().any(|e| e["payload"]["cost_estimated"] == false
         && e["payload"]["prompt_tokens"] == 18
         && e["payload"]["completion_tokens"] == 9));
+}
+
+fn install_cmd_fixture(dest_dir: &Path) -> PathBuf {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/write_add.sh");
+    let dest = dest_dir.join("write_add.sh");
+    fs::copy(&src, &dest).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    dest
+}
+
+#[test]
+fn start_creates_missing_data_dir() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let data = h.data.path().join("nested").join("store");
+    assert!(!data.exists());
+    let out = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(&data)
+        .current_dir(h.path())
+        .env("WANAX_DATA_DIR", &data)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "stdout={stdout} stderr={stderr}");
+    assert!(data.join("wanax.db").is_file());
+}
+
+#[test]
+fn cmd_adapter_accepts() {
+    let h = Harness::new();
+    let script = install_cmd_fixture(h.data.path());
+    h.set_adapter_cmd(&script);
+    h.write_contract(&contract("src/**"));
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "cmd",
+        ],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+    let env = h.envelope();
+    assert_eq!(env["current_state"], "accepted");
+}
+
+#[test]
+fn cmd_adapter_missing_binary() {
+    let h = Harness::new();
+    h.set_adapter_cmd(Path::new("wanax-missing-cmd-binary-9f3a"));
+    h.write_contract(&contract("src/**"));
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "cmd",
+        ],
+        8,
+    );
+    assert!(out.stderr.contains("E_ADAPTER_MISSING"), "{}", out.stderr);
+}
+
+#[test]
+fn goal_stops_on_no_progress() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake("turns = 1\nrun_tests = false\nclaimed_pass = true\n");
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        1,
+    );
+    assert!(
+        out.stdout.contains("state=escalate") || out.stderr.contains("E_REWORK_LIMIT"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    let env = h.envelope();
+    let events = env["events"].as_array().unwrap();
+    let first_outer = events
+        .iter()
+        .position(|e| e["kind"] == "outer_test_started")
+        .expect("outer test");
+    let reviews_before_outer = events[..first_outer]
+        .iter()
+        .filter(|e| e["kind"] == "state_changed" && e["payload"]["phase"] == "self_review")
+        .count();
+    assert_eq!(reviews_before_outer, 1, "{events:?}");
 }
 
 fn find_file(root: &Path, name: &str) -> Option<PathBuf> {

@@ -77,6 +77,10 @@ pub struct WorkerConfig {
     pub adapter: String,
     #[serde(default = "default_octoscode_bin")]
     pub octoscode_bin: String,
+    #[serde(default)]
+    pub cmd: String,
+    #[serde(default)]
+    pub cmd_args: Vec<String>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u32,
 }
@@ -86,6 +90,8 @@ impl Default for WorkerConfig {
         Self {
             adapter: default_adapter(),
             octoscode_bin: default_octoscode_bin(),
+            cmd: String::new(),
+            cmd_args: Vec::new(),
             timeout_secs: default_timeout(),
         }
     }
@@ -364,16 +370,21 @@ fn load_file(path: &Path) -> Result<FileConfig, WanaxError> {
     })
 }
 
+fn is_init_placeholder_commander(c: &CommanderConfig) -> bool {
+    c.model == default_commander_model() && c.provider == default_provider() && c.base_url.is_none()
+}
+
+fn is_init_placeholder_inner(c: &InnerConfig) -> bool {
+    c.model == default_inner_model() && c.provider == default_provider() && c.base_url.is_none()
+}
+
 fn overlay(mut base: FileConfig, over: FileConfig) -> FileConfig {
-    if over.commander.model != default_commander_model()
-        || over.commander.provider != default_provider()
-    {
-        base.commander = over.commander;
-    } else {
-        // still take repo values when file was explicit; simplest: always prefer over
+    if !is_init_placeholder_commander(&over.commander) {
         base.commander = over.commander;
     }
-    base.inner = over.inner;
+    if !is_init_placeholder_inner(&over.inner) {
+        base.inner = over.inner;
+    }
     base.reviewer = over.reviewer;
     base.worker = over.worker;
     base.budget = over.budget;
@@ -408,5 +419,66 @@ mod tests {
         assert_eq!(r.max_usd_micros, 5_000_000);
         assert_eq!(r.file.budget.max_inner_turns, 40);
         assert!(r.file.lock.repo_exclusive);
+    }
+
+    #[test]
+    fn overlay_keeps_global_models_when_repo_is_init_placeholder() {
+        let global = FileConfig {
+            commander: CommanderConfig {
+                provider: default_provider(),
+                model: "anthropic/claude-opus-5".into(),
+                base_url: Some("https://openrouter.ai/api/v1".into()),
+            },
+            inner: InnerConfig {
+                provider: default_provider(),
+                model: "z-ai/glm-5.3-flash".into(),
+                base_url: Some("https://openrouter.ai/api/v1".into()),
+            },
+            ..FileConfig::default()
+        };
+        let repo: FileConfig = toml::from_str(&default_config_toml()).unwrap();
+        let merged = overlay(global, repo);
+        assert_eq!(merged.commander.model, "anthropic/claude-opus-5");
+        assert_eq!(
+            merged.commander.base_url.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(merged.inner.model, "z-ai/glm-5.3-flash");
+        assert_eq!(
+            merged.inner.base_url.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+    }
+
+    #[test]
+    fn overlay_uses_repo_when_models_are_explicit() {
+        let global = FileConfig {
+            commander: CommanderConfig {
+                provider: default_provider(),
+                model: "global-commander".into(),
+                base_url: Some("https://example.test/v1".into()),
+            },
+            ..FileConfig::default()
+        };
+        let repo = FileConfig {
+            commander: CommanderConfig {
+                provider: default_provider(),
+                model: "repo-commander".into(),
+                base_url: Some("https://repo.test/v1".into()),
+            },
+            inner: InnerConfig {
+                provider: default_provider(),
+                model: "repo-inner".into(),
+                base_url: None,
+            },
+            ..FileConfig::default()
+        };
+        let merged = overlay(global, repo);
+        assert_eq!(merged.commander.model, "repo-commander");
+        assert_eq!(
+            merged.commander.base_url.as_deref(),
+            Some("https://repo.test/v1")
+        );
+        assert_eq!(merged.inner.model, "repo-inner");
     }
 }

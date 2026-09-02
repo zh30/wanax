@@ -24,13 +24,13 @@ use wanax_git::{
 };
 use wanax_llm::{
     dispatch_with_retry, pick_commander, pick_review_client, run_self_review, Commander,
-    DispatchContext, LlmUsage, VerdictContext,
+    DispatchContext, LlmUsage, MechanicalCommander, VerdictContext,
 };
 use wanax_tombstone::{
     append_event, init_envelope, make_event, persist_envelope, run_dir, Actor, EventKind,
 };
 use wanax_verify::{check_boundaries, compile_globs, run_test_command};
-use wanax_worker::{FakeAdapter, OctoscodeAdapter, WorkerAdapter, WorkerContext};
+use wanax_worker::{CmdAdapter, FakeAdapter, OctoscodeAdapter, WorkerAdapter, WorkerContext};
 
 pub struct StartOpts {
     pub contract: PathBuf,
@@ -68,6 +68,13 @@ pub async fn start(opts: StartOpts) -> Result<(), WanaxError> {
             ));
         }
     }
+    if adapter_kind == WorkerAdapterKind::Cmd {
+        CmdAdapter::new(
+            cfg.file.worker.cmd.clone(),
+            cfg.file.worker.cmd_args.clone(),
+        )
+        .resolve_bin()?;
+    }
 
     let contract_abs = if opts.contract.is_absolute() {
         opts.contract.clone()
@@ -93,8 +100,7 @@ pub async fn start(opts: StartOpts) -> Result<(), WanaxError> {
         }
     }
 
-    fs::create_dir_all(opts.data_dir.join("."))
-        .map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
+    fs::create_dir_all(&opts.data_dir).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
     let store = Store::open(&opts.data_dir.join("wanax.db")).await?;
 
     let run_id = new_id();
@@ -454,7 +460,7 @@ async fn run_factory(
             boundary_ok: boundary.ok,
             rework_count: current_rework,
         };
-        let (proposed, usage) = {
+        let (proposed, usage) = if gates.can_accept() {
             let mut last = WanaxError::from_code(ErrorCode::CommanderSchema);
             let mut got = None;
             for _ in 0..3 {
@@ -473,6 +479,14 @@ async fn run_factory(
             match got {
                 Some(v) => v,
                 None => break fail_run(store, repo, &mut run, last).await,
+            }
+        } else {
+            match MechanicalCommander::new(run.commander_model.clone())
+                .verdict(&vctx)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => break fail_run(store, repo, &mut run, e).await,
             }
         };
         charge_and_tick(
@@ -679,6 +693,7 @@ async fn run_goal_loop(
         timeout_secs: cfg.file.worker.timeout_secs,
     };
     let mut last_handle = None;
+    let mut prev_paths: Option<Vec<String>> = None;
     for iter in 1..=MAX_GOAL_ITERS {
         if is_budget_exhausted(run) {
             break;
@@ -693,6 +708,7 @@ async fn run_goal_loop(
                 json!({ "phase": "plan", "iter": iter }),
             ),
         );
+        let before = goal_status_paths(inner_wt)?;
         let handle =
             start_adapter(adapter_kind, cfg, &ctx, spec_path, unit.rework_count, iter).await?;
         add_turns(run, handle.turns);
@@ -706,17 +722,9 @@ async fn run_goal_loop(
         let mut handle = handle;
         handle.test_exit_code = inner_code;
         handle.test_excerpt = test.excerpt.clone();
+        handle.duration_ms = test.duration_ms;
 
-        let changed: Vec<String> = status_paths(inner_wt)?
-            .into_iter()
-            .filter(|p| {
-                !p.starts_with(".wanax/")
-                    && !p.starts_with(".wanax-bin/")
-                    && !p.starts_with("target/")
-                    && p != "WORK_UNIT.md"
-                    && p != "Cargo.lock"
-            })
-            .collect();
+        let changed = goal_status_paths(inner_wt)?;
         let review = run_self_review(
             run.reviewer_model.as_deref(),
             &run.inner_model,
@@ -757,8 +765,27 @@ async fn run_goal_loop(
         if inner_code == 0 || is_budget_exhausted(run) {
             break;
         }
+        if changed == before || prev_paths.as_ref() == Some(&changed) {
+            break;
+        }
+        prev_paths = Some(changed);
     }
     last_handle.ok_or_else(|| WanaxError::from_code(ErrorCode::WorkerCrash))
+}
+
+fn goal_status_paths(inner_wt: &Path) -> Result<Vec<String>, WanaxError> {
+    let mut paths: Vec<String> = status_paths(inner_wt)?
+        .into_iter()
+        .filter(|p| {
+            !p.starts_with(".wanax/")
+                && !p.starts_with(".wanax-bin/")
+                && !p.starts_with("target/")
+                && p != "WORK_UNIT.md"
+                && p != "Cargo.lock"
+        })
+        .collect();
+    paths.sort();
+    Ok(paths)
 }
 
 async fn start_adapter(
@@ -782,6 +809,14 @@ async fn start_adapter(
             OctoscodeAdapter::new(&cfg.file.worker.octoscode_bin)
                 .start(ctx)
                 .await
+        }
+        WorkerAdapterKind::Cmd => {
+            CmdAdapter::new(
+                cfg.file.worker.cmd.clone(),
+                cfg.file.worker.cmd_args.clone(),
+            )
+            .start(ctx)
+            .await
         }
         _ => Err(WanaxError::new(
             ErrorCode::AdapterMissing,

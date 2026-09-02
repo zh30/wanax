@@ -25,6 +25,15 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         .unwrap_or("octoscode");
     if adapter_name == "fake" {
         println!("adapter fake: ok");
+    } else if adapter_name == "cmd" {
+        let cmd = cfg
+            .as_ref()
+            .map(|c| c.file.worker.cmd.as_str())
+            .unwrap_or("");
+        match wanax_worker::resolve_cmd_bin(cmd) {
+            Ok(_) => println!("adapter {cmd}: ok"),
+            Err(_) => println!("adapter {cmd}: missing"),
+        }
     } else {
         match which::which(adapter_bin) {
             Ok(_) => {

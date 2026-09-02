@@ -26,6 +26,7 @@ struct Cli {
 enum AdapterArg {
     Octoscode,
     Fake,
+    Cmd,
 }
 
 impl From<AdapterArg> for WorkerAdapterKind {
@@ -33,6 +34,7 @@ impl From<AdapterArg> for WorkerAdapterKind {
         match v {
             AdapterArg::Octoscode => Self::Octoscode,
             AdapterArg::Fake => Self::Fake,
+            AdapterArg::Cmd => Self::Cmd,
         }
     }
 }

@@ -155,6 +155,7 @@ impl AssigneeRole {
 pub enum WorkerAdapterKind {
     Octoscode,
     Fake,
+    Cmd,
     Claude,
     Codex,
 }
@@ -164,6 +165,7 @@ impl WorkerAdapterKind {
         match self {
             Self::Octoscode => "octoscode",
             Self::Fake => "fake",
+            Self::Cmd => "cmd",
             Self::Claude => "claude",
             Self::Codex => "codex",
         }
@@ -173,6 +175,7 @@ impl WorkerAdapterKind {
         Some(match s {
             "octoscode" => Self::Octoscode,
             "fake" => Self::Fake,
+            "cmd" => Self::Cmd,
             "claude" => Self::Claude,
             "codex" => Self::Codex,
             _ => return None,
@@ -180,7 +183,7 @@ impl WorkerAdapterKind {
     }
 
     pub fn is_phase1(self) -> bool {
-        matches!(self, Self::Octoscode | Self::Fake)
+        matches!(self, Self::Octoscode | Self::Fake | Self::Cmd)
     }
 }
 

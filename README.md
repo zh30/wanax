@@ -157,8 +157,10 @@ base_url = "https://api.openai.com/v1"
 # empty → self-review is mechanical only (tombstone: self_review=degraded)
 
 [worker]
-adapter = "octoscode"
+adapter = "octoscode"   # octoscode | fake | cmd
 octoscode_bin = "octoscode"
+# cmd = "my-agent"       # PATH name or absolute path when adapter = "cmd"
+# cmd_args = []          # optional; instruction is WANAX_INSTRUCTION, not argv
 
 [budget]
 max_usd = "5.00"
@@ -195,7 +197,7 @@ base_url = "https://openrouter.ai/api/v1"
 export WANAX_COMMANDER_API_KEY="$OPENROUTER_API_KEY"
 ```
 
-`wanax init` writes placeholder `model = "commander"` into the **repo** file. Repo config fully overlays `~/.wanax/config.toml`, so after init copy the two `model` / `base_url` lines into `.wanax/config.toml` or the global file will not apply.
+`wanax init` writes placeholder `model = "commander"` / `model = "inner"` into the **repo** file. Those init placeholders do not replace a real commander/inner block in `~/.wanax/config.toml`. Set models once globally, then `export WANAX_COMMANDER_API_KEY`.
 
 Without a commander key or a fixture, start falls back to a mechanical commander (useful for CI). Live keys are required for a real outer model.
 
@@ -204,7 +206,7 @@ Without a commander key or a fixture, start falls back to a mechanical commander
 | Command | Purpose |
 |---|---|
 | `wanax init [--force]` | Create `.wanax/` and an example contract |
-| `wanax start --contract <path> [--adapter octoscode\|fake] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
+| `wanax start --contract <path> [--adapter octoscode\|fake\|cmd] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
 | `wanax status [run_id]` | State, spend, current unit, last event |
 | `wanax cancel <run_id>` | SIGTERM the worker, keep the tombstone, release the lock |
 | `wanax verdict <run_id>` | Print the last outer verdict |
@@ -233,7 +235,8 @@ Implemented through **Phase 2** of [`docs/PRD.md`](docs/PRD.md):
 - Outer retest on a fresh worktree, glob boundaries, USD + turn budget
 - HTTP commander (Anthropic Messages or OpenAI-compatible Chat Completions)
 - Cassette fixtures via `WANAX_LLM_FIXTURE_DIR` (CI does not call a paid API)
-- Workers: `octoscode`, `fake`
+- Workers: `octoscode`, `fake`, `cmd` (generic subprocess; instruction via `WANAX_INSTRUCTION`)
+- Goal stops when a red inner test makes no file progress; expensive commander verdict runs only when FR-014 gates are green
 
 Not in v1 yet: peer worktrees, GitHub PRs, crash resume, multi-unit DAGs, Claude/Codex adapters, `--lang zh`.
 

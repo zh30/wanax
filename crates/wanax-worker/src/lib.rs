@@ -157,10 +157,7 @@ pub fn load_fake_spec(worktree_or_repo: &Path) -> FakeSpec {
             }
         }
     }
-    FakeSpec {
-        run_tests: true,
-        ..FakeSpec::default()
-    }
+    FakeSpec::default()
 }
 
 pub struct FakeAdapter {
@@ -453,6 +450,136 @@ impl WorkerAdapter for OctoscodeAdapter {
     }
 }
 
+pub fn resolve_cmd_bin(cmd: &str) -> Result<PathBuf, WanaxError> {
+    let trimmed = cmd.trim();
+    if trimmed.is_empty() {
+        return Err(WanaxError::new(
+            ErrorCode::AdapterMissing,
+            "adapter binary not found: cmd",
+        ));
+    }
+    let p = Path::new(trimmed);
+    if p.is_file() {
+        return Ok(p.to_path_buf());
+    }
+    which::which(trimmed).map_err(|_| {
+        WanaxError::new(
+            ErrorCode::AdapterMissing,
+            format!("adapter binary not found: {trimmed}"),
+        )
+    })
+}
+
+pub struct CmdAdapter {
+    pub cmd: String,
+    pub args: Vec<String>,
+}
+
+impl CmdAdapter {
+    pub fn new(cmd: impl Into<String>, args: Vec<String>) -> Self {
+        Self {
+            cmd: cmd.into(),
+            args,
+        }
+    }
+
+    pub fn resolve_bin(&self) -> Result<PathBuf, WanaxError> {
+        resolve_cmd_bin(&self.cmd)
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for CmdAdapter {
+    async fn start(&self, ctx: &WorkerContext) -> Result<WorkerHandle, WanaxError> {
+        let bin = self.resolve_bin()?;
+        let mut env = sanitized_env(ctx);
+        env.insert("WANAX_INSTRUCTION".into(), ctx.instruction.clone());
+        debug_assert!(!env_has_forbidden(&env));
+        let started = std::time::Instant::now();
+        let mut cmd = Command::new(&bin);
+        cmd.args(&self.args)
+            .current_dir(&ctx.worktree)
+            .env_clear()
+            .envs(&env)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let child = cmd.spawn().map_err(|e| {
+            WanaxError::new(
+                ErrorCode::AdapterMissing,
+                format!("adapter binary not found: {}: {e}", self.cmd),
+            )
+        })?;
+        let pid = child.id().unwrap_or(0);
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(u64::from(ctx.timeout_secs)),
+            child.wait_with_output(),
+        )
+        .await
+        .map_err(|_| WanaxError::from_code(ErrorCode::WorkerTimeout))?
+        .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
+        if !out.status.success() {
+            return Err(WanaxError::from_code(ErrorCode::WorkerCrash));
+        }
+        let excerpt = {
+            let mut t = String::from_utf8_lossy(&out.stdout).into_owned();
+            t.push_str(&String::from_utf8_lossy(&out.stderr));
+            t.chars()
+                .rev()
+                .take(8000)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect()
+        };
+        Ok(WorkerHandle {
+            pid,
+            claimed_pass: out.status.success(),
+            test_exit_code: out.status.code().unwrap_or(1),
+            test_excerpt: excerpt,
+            duration_ms: started.elapsed().as_millis() as u64,
+            turns: 1,
+            crashed: false,
+            timed_out: false,
+            raw_artifact_path: None,
+        })
+    }
+
+    async fn status(&self, _handle: &WorkerHandle) -> Result<WorkerStatus, WanaxError> {
+        Ok(WorkerStatus::Exited)
+    }
+
+    async fn cancel(&self, handle: &WorkerHandle) -> Result<(), WanaxError> {
+        if handle.pid > 0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &handle.pid.to_string()])
+                .status();
+        }
+        Ok(())
+    }
+
+    async fn collect_receipt(
+        &self,
+        ctx: &WorkerContext,
+        handle: &WorkerHandle,
+    ) -> Result<Receipt, WanaxError> {
+        Ok(Receipt {
+            id: wanax_core::new_id(),
+            work_unit_id: ctx.work_unit_id.clone(),
+            changed_files: Vec::new(),
+            diffstat: String::new(),
+            commit_sha: String::new(),
+            test_command: ctx.test_command.clone(),
+            test_exit_code: handle.test_exit_code,
+            test_excerpt: handle.test_excerpt.clone(),
+            claimed_pass: handle.claimed_pass,
+            duration_ms: handle.duration_ms,
+            adapter: "cmd".into(),
+            raw_artifact_path: handle.raw_artifact_path.clone(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +606,48 @@ mod tests {
         assert!(!env.contains_key("GH_TOKEN"));
         assert!(!env.contains_key("SSH_AUTH_SOCK"));
         assert!(!env.contains_key("GIT_ASKPASS"));
+    }
+
+    #[test]
+    fn resolve_cmd_bin_rejects_empty() {
+        let err = resolve_cmd_bin("").unwrap_err();
+        assert_eq!(err.code, ErrorCode::AdapterMissing);
+    }
+
+    #[tokio::test]
+    async fn cmd_adapter_passes_instruction_via_env_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("worker.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf %s \"$WANAX_INSTRUCTION\" > out.txt\nprintf %s \"$*\" > args.txt\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let adapter = CmdAdapter::new(script.display().to_string(), vec!["--quiet".into()]);
+        let ctx = WorkerContext {
+            run_id: "wx_01AAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            work_unit_id: "wx_01BBBBBBBBBBBBBBBBBBBBBBBB".into(),
+            test_command: "cargo test".into(),
+            test_timeout_secs: 30,
+            worktree: dir.path().to_path_buf(),
+            instruction: "implement add without leaking".into(),
+            adapter_name: "cmd".into(),
+            extra_path: None,
+            timeout_secs: 10,
+        };
+        adapter.start(&ctx).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("out.txt")).unwrap(),
+            "implement add without leaking"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("args.txt")).unwrap(),
+            "--quiet"
+        );
     }
 }
