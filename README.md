@@ -173,7 +173,29 @@ Keys come only from the environment. They are never written to git or to the tom
 | `WANAX_INNER_API_KEY` | Semantic self-review when `reviewer.model` ≠ `inner.model` |
 | `WANAX_DATA_DIR` | SQLite home (default `~/.wanax`) |
 
-`provider = "openai_compat"` plus `base_url` is the hook for any Chat Completions host (including `https://api.x.ai/v1`). Consumer chat subscriptions are a different ledger; Wanax talks to the HTTP API only.
+`provider = "openai_compat"` plus `base_url` is the hook for any Chat Completions host. There is no separate `openrouter` provider. Consumer chat subscriptions (including SuperGrok) are a different ledger; Wanax talks to the HTTP API only.
+
+### OpenRouter
+
+Point both loops at `https://openrouter.ai/api/v1` and use catalog slugs from [openrouter.ai/models](https://openrouter.ai/models):
+
+```toml
+[commander]
+provider = "openai_compat"
+model = "anthropic/claude-opus-5"    # dispatch + verdict only
+base_url = "https://openrouter.ai/api/v1"
+
+[inner]
+provider = "openai_compat"
+model = "z-ai/glm-5.3-flash"         # tombstone label; semantic review only if reviewer.model is set and distinct
+base_url = "https://openrouter.ai/api/v1"
+```
+
+```bash
+export WANAX_COMMANDER_API_KEY="$OPENROUTER_API_KEY"
+```
+
+`wanax init` writes placeholder `model = "commander"` into the **repo** file. Repo config fully overlays `~/.wanax/config.toml`, so after init copy the two `model` / `base_url` lines into `.wanax/config.toml` or the global file will not apply.
 
 Without a commander key or a fixture, start falls back to a mechanical commander (useful for CI). Live keys are required for a real outer model.
 
