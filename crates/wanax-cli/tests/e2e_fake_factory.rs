@@ -209,6 +209,15 @@ fn init_on_git_repo_creates_files() {
     assert!(h.path().join(".wanax/config.toml").is_file());
     assert!(h.path().join(".wanax/.gitignore").is_file());
     assert!(h.path().join("specs/example.contract.md").is_file());
+    let example = fs::read_to_string(h.path().join("specs/example.contract.md")).unwrap();
+    assert!(
+        example.contains("- \"src/**\""),
+        "example must allow implementation paths"
+    );
+    assert!(
+        !example.contains("- \"tests/**\""),
+        "example must not allow rewriting tests: {example}"
+    );
     let gi = fs::read_to_string(h.path().join(".wanax/.gitignore")).unwrap();
     assert!(gi.contains("worktrees/"));
     assert!(gi.contains("LOCK"));
