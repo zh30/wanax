@@ -650,4 +650,30 @@ mod tests {
             "--quiet"
         );
     }
+
+    #[tokio::test]
+    async fn cmd_adapter_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("sleep.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 5\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let adapter = CmdAdapter::new(script.display().to_string(), Vec::new());
+        let ctx = WorkerContext {
+            run_id: "wx_01AAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            work_unit_id: "wx_01BBBBBBBBBBBBBBBBBBBBBBBB".into(),
+            test_command: "cargo test".into(),
+            test_timeout_secs: 30,
+            worktree: dir.path().to_path_buf(),
+            instruction: "sleep".into(),
+            adapter_name: "cmd".into(),
+            extra_path: None,
+            timeout_secs: 1,
+        };
+        let err = adapter.start(&ctx).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::WorkerTimeout);
+    }
 }
