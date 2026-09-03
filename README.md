@@ -216,6 +216,8 @@ cmd = "/absolute/path/to/wanax/scripts/workers/claude.sh"
 
 Keep binding tests **outside** `allowed_globs`. If the tests live in `src/lib.rs` and that path is allowed, a worker can rewrite them to `assert!(true)` and the outer retest will still go green. Prefer `tests/*.rs` plus `allowed_globs = ["src/**"]`. Changing `Cargo.toml` when it is not allowed is already `E_BOUNDARY`.
 
+`start` and `doctor` warn (`E_CONTRACT_TESTS_WRITABLE`) when `allowed_globs` can match `tests/**`. The run still proceeds. `doctor --strict` exits 4.
+
 ## Commands
 
 | Command | Purpose |

@@ -1,9 +1,11 @@
 use std::path::Path;
 use wanax_core::config::load_merged_config;
+use wanax_core::contract::parse_contract_file;
 use wanax_core::error::{ErrorCode, WanaxError};
 use wanax_core::lock::inspect_lock;
 use wanax_core::{clear_stale_lock, Store};
 use wanax_git::is_git_repo;
+use wanax_verify::allowed_globs_cover_binding_tests;
 
 pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), WanaxError> {
     let cwd = std::env::current_dir().map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
@@ -108,8 +110,51 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         if writable { "writable" } else { "not writable" }
     );
 
+    let tests_writable = scan_writable_test_contracts(&cwd);
+    if tests_writable.is_empty() {
+        println!("contracts: binding tests outside allowed_globs");
+    } else {
+        for rel in &tests_writable {
+            println!(
+                "WARN {} {} ({rel})",
+                ErrorCode::ContractTestsWritable.as_str(),
+                ErrorCode::ContractTestsWritable.default_message()
+            );
+        }
+    }
+
     if strict && !cmd_key {
         return Err(WanaxError::from_code(ErrorCode::MissingApiKey));
     }
+    if strict && !tests_writable.is_empty() {
+        return Err(WanaxError::from_code(ErrorCode::ContractTestsWritable));
+    }
     Ok(())
+}
+
+fn scan_writable_test_contracts(cwd: &Path) -> Vec<String> {
+    let specs = cwd.join("specs");
+    let Ok(rd) = std::fs::read_dir(&specs) else {
+        return Vec::new();
+    };
+    let mut hits = Vec::new();
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        if !name.ends_with(".contract.md") {
+            continue;
+        }
+        let rel = format!("specs/{name}");
+        let Ok(contract) = parse_contract_file(&path, &rel) else {
+            continue;
+        };
+        if allowed_globs_cover_binding_tests(&contract.allowed_globs) {
+            hits.push(rel);
+        }
+    }
+    hits.sort();
+    hits
 }

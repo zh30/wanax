@@ -718,6 +718,64 @@ fn status_empty_and_unknown() {
 }
 
 #[test]
+fn writable_tests_warns_but_still_accepts() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let body = contract("src/**").replace(
+        "allowed_globs:\n  - \"src/**\"",
+        "allowed_globs:\n  - \"src/**\"\n  - \"tests/**\"",
+    );
+    h.write_contract(&body);
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+    assert!(
+        out.stderr.contains("E_CONTRACT_TESTS_WRITABLE"),
+        "{}",
+        out.stderr
+    );
+    let env = h.envelope();
+    let events = env["events"].as_array().unwrap();
+    assert!(events
+        .iter()
+        .any(|e| { e["kind"] == "error" && e["payload"]["code"] == "E_CONTRACT_TESTS_WRITABLE" }));
+}
+
+#[test]
+fn doctor_strict_writable_tests() {
+    let h = Harness::new();
+    let body = contract("src/**").replace(
+        "allowed_globs:\n  - \"src/**\"",
+        "allowed_globs:\n  - \"src/**\"\n  - \"tests/**\"",
+    );
+    fs::write(h.path().join("specs/add.contract.md"), body).unwrap();
+    let out = wanax()
+        .args(["doctor", "--strict", "--data-dir"])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_COMMANDER_API_KEY", "test-not-a-real-key")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stderr.contains("E_CONTRACT_TESTS_WRITABLE")
+            || stdout.contains("E_CONTRACT_TESTS_WRITABLE"),
+        "stdout={stdout} stderr={stderr}"
+    );
+}
+
+#[test]
 fn doctor_strict_missing_key() {
     let h = Harness::new();
     let out = wanax()
