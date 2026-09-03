@@ -859,6 +859,17 @@ fn llm_fixture_accepts_and_records_usage() {
         && e["payload"]["completion_tokens"] == 9));
 }
 
+fn install_cmd_script(dest_dir: &Path, name: &str, body: &str) -> PathBuf {
+    let dest = dest_dir.join(name);
+    fs::write(&dest, body).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dest, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    dest
+}
+
 fn install_cmd_fixture(dest_dir: &Path) -> PathBuf {
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/write_add.sh");
     let dest = dest_dir.join("write_add.sh");
@@ -918,6 +929,79 @@ fn cmd_adapter_accepts() {
     assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
     let env = h.envelope();
     assert_eq!(env["current_state"], "accepted");
+}
+
+#[test]
+fn cmd_adapter_boundary_rejects() {
+    let h = Harness::new();
+    let script = install_cmd_script(
+        h.data.path(),
+        "write_boundary.sh",
+        &format!(
+            "#!/bin/sh\nset -eu\ncat > src/lib.rs << 'EOF'\n{GOOD_LIB}EOF\ncat > Cargo.toml << 'EOF'\n[package]\nname = \"fixture\"\nversion = \"0.2.0\"\nedition = \"2021\"\nEOF\n"
+        ),
+    );
+    h.set_adapter_cmd(&script);
+    h.write_contract(&contract("src/**"));
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "cmd",
+        ],
+        1,
+    );
+    assert!(
+        out.stderr.contains("E_BOUNDARY") || out.stdout.contains("state=rejected"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(!out.stdout.contains("state=accepted"));
+}
+
+#[test]
+fn cmd_rewritten_tests_rejected_when_outside_globs() {
+    let h = Harness::new();
+    fs::write(
+        h.path().join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { unimplemented!() }\n",
+    )
+    .unwrap();
+    fs::create_dir_all(h.path().join("tests")).unwrap();
+    fs::write(
+        h.path().join("tests/add.rs"),
+        "#[test]\nfn test_add() { assert_eq!(fixture::add(2, 3), 5); }\n",
+    )
+    .unwrap();
+    git(h.path(), &["add", "src/lib.rs", "tests/add.rs"]);
+    git(h.path(), &["commit", "-m", "move tests out of src"]);
+    let script = install_cmd_script(
+        h.data.path(),
+        "rewrite_tests.sh",
+        "#!/bin/sh\nset -eu\ncat > src/lib.rs << 'EOF'\npub fn add(a: i32, b: i32) -> i32 { a + b }\nEOF\ncat > tests/add.rs << 'EOF'\n#[test]\nfn test_add() { assert!(true); }\nEOF\n",
+    );
+    h.set_adapter_cmd(&script);
+    h.write_contract(&contract("src/**"));
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "cmd",
+        ],
+        1,
+    );
+    assert!(
+        out.stderr.contains("E_BOUNDARY") || out.stdout.contains("state=rejected"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(!out.stdout.contains("state=accepted"));
 }
 
 #[test]

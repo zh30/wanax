@@ -201,6 +201,21 @@ export WANAX_COMMANDER_API_KEY="$OPENROUTER_API_KEY"
 
 Without a commander key or a fixture, start falls back to a mechanical commander (useful for CI). Live keys are required for a real outer model.
 
+### Real `cmd` workers
+
+`cmd` does not put the work unit on argv. Point `worker.cmd` at a wrapper that reads `WANAX_INSTRUCTION` and starts a non-interactive coding CLI. Examples in this repo:
+
+```toml
+[worker]
+adapter = "cmd"
+cmd = "/absolute/path/to/wanax/scripts/workers/claude.sh"
+# or: cmd = "/absolute/path/to/wanax/scripts/workers/codex.sh"
+```
+
+`claude.sh` uses `--dangerously-skip-permissions` so the run does not stop for tool approval. Use it only inside a Wanax inner worktree (no push, tokens already stripped). `codex.sh` uses `--sandbox workspace-write`. The factory still runs `test_command` itself after the process exits.
+
+Keep binding tests **outside** `allowed_globs`. If the tests live in `src/lib.rs` and that path is allowed, a worker can rewrite them to `assert!(true)` and the outer retest will still go green. Prefer `tests/*.rs` plus `allowed_globs = ["src/**"]`. Changing `Cargo.toml` when it is not allowed is already `E_BOUNDARY`.
+
 ## Commands
 
 | Command | Purpose |
@@ -235,7 +250,7 @@ Implemented through **Phase 2** of [`docs/PRD.md`](docs/PRD.md):
 - Outer retest on a fresh worktree, glob boundaries, USD + turn budget
 - HTTP commander (Anthropic Messages or OpenAI-compatible Chat Completions)
 - Cassette fixtures via `WANAX_LLM_FIXTURE_DIR` (CI does not call a paid API)
-- Workers: `octoscode`, `fake`, `cmd` (generic subprocess; instruction via `WANAX_INSTRUCTION`)
+- Workers: `octoscode`, `fake`, `cmd` (generic subprocess; instruction via `WANAX_INSTRUCTION`; example wrappers in `scripts/workers/`)
 - Goal stops when a red inner test makes no file progress; expensive commander verdict runs only when FR-014 gates are green
 
 Not in v1 yet: peer worktrees, GitHub PRs, crash resume, multi-unit DAGs, Claude/Codex adapters, `--lang zh`.
