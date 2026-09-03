@@ -750,6 +750,7 @@ v1 无 GUI。组件是 CLI 与文件。
 | E_BUDGET | 超 USD 或 turns | budget_exhausted | `budget exhausted usd=<x> turns=<y>` |
 | E_REWORK_LIMIT | rework>3 | escalate | `max rework exceeded` |
 | E_CONTRACT_MUTATED | 运行中契约文件被改 | 忽略磁盘新内容，沿用冻结 hash；status 警告 | `contract mutated on disk; run still uses frozen hash` |
+| E_CONTRACT_TESTS_WRITABLE | `allowed_globs` 能改到 `tests/` | start/doctor 警告，不阻断；`doctor --strict` exit 4 | `allowed_globs include binding tests; a worker can rewrite them` |
 | E_PUSH_ATTEMPT | 内环 git push | 失败；若意外成功视为安全漏洞测试失败 | push denied |
 | E_PEER_OVERLAP | P1 文件集相交 | failed，不合并 | `peer file sets overlap` |
 | E_LOCK_STALE | pid 死锁文件在 | start 仍拒绝；doctor --fix-lock 清 | `stale lock pid=<n>` |

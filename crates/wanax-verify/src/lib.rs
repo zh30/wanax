@@ -18,6 +18,21 @@ pub fn compile_globs(patterns: &[String]) -> Result<GlobSet, WanaxError> {
         .map_err(|e| WanaxError::with_detail(ErrorCode::ContractInvalid, e))
 }
 
+/// True when `allowed_globs` can match files under `tests/` (integration tests).
+/// `src/**` alone does not trigger this — unit tests inside `src/` are a separate hole.
+pub fn allowed_globs_cover_binding_tests(patterns: &[String]) -> bool {
+    if patterns.iter().any(|p| {
+        p.split('/')
+            .any(|seg| seg == "tests" || seg.eq_ignore_ascii_case("tests"))
+    }) {
+        return true;
+    }
+    match compile_globs(patterns) {
+        Ok(set) => set.is_match("tests/foo.rs") || set.is_match("tests/a/b.rs"),
+        Err(_) => false,
+    }
+}
+
 pub fn is_factory_meta(path: &str) -> bool {
     path.starts_with(".wanax/runs/") || path.starts_with(".wanax/worktrees/")
 }
@@ -184,6 +199,25 @@ mod tests {
         )
         .unwrap();
         assert!(r.ok);
+    }
+
+    #[test]
+    fn src_globs_do_not_cover_binding_tests() {
+        assert!(!allowed_globs_cover_binding_tests(&["src/**".into()]));
+    }
+
+    #[test]
+    fn tests_globs_and_star_cover_binding_tests() {
+        assert!(allowed_globs_cover_binding_tests(&["tests/**".into()]));
+        assert!(allowed_globs_cover_binding_tests(&[
+            "src/**".into(),
+            "tests/**".into()
+        ]));
+        assert!(allowed_globs_cover_binding_tests(&["**/*".into()]));
+        assert!(allowed_globs_cover_binding_tests(&["**/*.rs".into()]));
+        assert!(allowed_globs_cover_binding_tests(&[
+            "crates/foo/tests/**".into()
+        ]));
     }
 
     #[test]

@@ -29,7 +29,9 @@ use wanax_llm::{
 use wanax_tombstone::{
     append_event, init_envelope, make_event, persist_envelope, run_dir, Actor, EventKind,
 };
-use wanax_verify::{check_boundaries, compile_globs, run_test_command};
+use wanax_verify::{
+    allowed_globs_cover_binding_tests, check_boundaries, compile_globs, run_test_command,
+};
 use wanax_worker::{CmdAdapter, FakeAdapter, OctoscodeAdapter, WorkerAdapter, WorkerContext};
 
 pub struct StartOpts {
@@ -92,6 +94,14 @@ pub async fn start(opts: StartOpts) -> Result<(), WanaxError> {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|_| opts.contract.to_string_lossy().replace('\\', "/"));
     let contract = parse_contract_file(&contract_abs, &rel)?;
+    let tests_writable = allowed_globs_cover_binding_tests(&contract.allowed_globs);
+    if tests_writable {
+        eprintln!(
+            "WARN {} {}",
+            ErrorCode::ContractTestsWritable.as_str(),
+            ErrorCode::ContractTestsWritable.default_message()
+        );
+    }
 
     if !opts.allow_dirty {
         let dirty = dirty_non_wanax(&repo)?;
@@ -189,6 +199,21 @@ async fn run_factory(
         json!({ "base_sha": base_sha }),
     );
     init_envelope(repo, &run.id, &run.contract_sha256, "dispatched", started)?;
+    if allowed_globs_cover_binding_tests(&contract.allowed_globs) {
+        let _ = append_event(
+            repo,
+            &run.id,
+            "dispatched",
+            make_event(
+                Actor::System,
+                EventKind::Error,
+                json!({
+                    "code": ErrorCode::ContractTestsWritable.as_str(),
+                    "note": "WARN",
+                }),
+            ),
+        );
+    }
     store
         .set_state(&mut run, RunState::Dispatched, None)
         .await?;

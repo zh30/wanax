@@ -22,6 +22,7 @@ pub enum ErrorCode {
     Budget,
     ReworkLimit,
     ContractMutated,
+    ContractTestsWritable,
     PushAttempt,
     PeerOverlap,
     LockStale,
@@ -50,6 +51,7 @@ impl ErrorCode {
             Self::Budget => "E_BUDGET",
             Self::ReworkLimit => "E_REWORK_LIMIT",
             Self::ContractMutated => "E_CONTRACT_MUTATED",
+            Self::ContractTestsWritable => "E_CONTRACT_TESTS_WRITABLE",
             Self::PushAttempt => "E_PUSH_ATTEMPT",
             Self::PeerOverlap => "E_PEER_OVERLAP",
             Self::LockStale => "E_LOCK_STALE",
@@ -61,7 +63,7 @@ impl ErrorCode {
         match self {
             Self::NotGit => 2,
             Self::AlreadyInit => 3,
-            Self::ContractInvalid | Self::TestCommandForbidden => 4,
+            Self::ContractInvalid | Self::TestCommandForbidden | Self::ContractTestsWritable => 4,
             Self::DirtyWorktree => 5,
             Self::RepoLocked => 6,
             Self::RunNotFound => 7,
@@ -92,6 +94,9 @@ impl ErrorCode {
             Self::Budget => "budget exhausted",
             Self::ReworkLimit => "max rework exceeded",
             Self::ContractMutated => "contract mutated on disk; run still uses frozen hash",
+            Self::ContractTestsWritable => {
+                "allowed_globs include binding tests; a worker can rewrite them"
+            }
             Self::PushAttempt => "push denied",
             Self::PeerOverlap => "peer file sets overlap",
             Self::LockStale => "stale lock",
@@ -178,6 +183,7 @@ mod tests {
             ErrorCode::Budget,
             ErrorCode::ReworkLimit,
             ErrorCode::ContractMutated,
+            ErrorCode::ContractTestsWritable,
             ErrorCode::PushAttempt,
             ErrorCode::PeerOverlap,
             ErrorCode::LockStale,
@@ -195,6 +201,7 @@ mod tests {
         assert_eq!(ErrorCode::AlreadyInit.exit_code(), 3);
         assert_eq!(ErrorCode::ContractInvalid.exit_code(), 4);
         assert_eq!(ErrorCode::TestCommandForbidden.exit_code(), 4);
+        assert_eq!(ErrorCode::ContractTestsWritable.exit_code(), 4);
         assert_eq!(ErrorCode::DirtyWorktree.exit_code(), 5);
         assert_eq!(ErrorCode::RepoLocked.exit_code(), 6);
         assert_eq!(ErrorCode::RunNotFound.exit_code(), 7);
