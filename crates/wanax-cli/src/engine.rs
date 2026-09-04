@@ -10,7 +10,7 @@ use wanax_core::contract::parse_contract_file;
 use wanax_core::error::{ErrorCode, WanaxError};
 use wanax_core::hashutil::sha256_file;
 use wanax_core::ids::new_id;
-use wanax_core::lock::RepoLock;
+use wanax_core::lock::{LockAcquire, RepoLock};
 use wanax_core::timeutil::now_rfc3339;
 use wanax_core::types::{
     inner_branch_name, outer_branch_name, peer_branch_name, AssigneeRole, Contract, FactoryRun,
@@ -35,7 +35,10 @@ use wanax_verify::{
     allowed_globs_cover_binding_tests, check_boundaries, compile_globs, find_peer_overlap,
     run_test_command, run_verifier_plugins,
 };
-use wanax_worker::{CmdAdapter, FakeAdapter, OctoscodeAdapter, WorkerAdapter, WorkerContext};
+use wanax_worker::{
+    ClaudeAdapter, CmdAdapter, CodexAdapter, FakeAdapter, OctoscodeAdapter, WorkerAdapter,
+    WorkerContext,
+};
 
 pub struct StartOpts {
     pub contract: PathBuf,
@@ -61,32 +64,7 @@ pub async fn start(opts: StartOpts) -> Result<(), WanaxError> {
 
     let cfg = load_merged_config(&repo, &opts.data_dir)?;
     let adapter_kind = opts.adapter.unwrap_or(cfg.adapter);
-    if !adapter_kind.is_phase1() {
-        return Err(WanaxError::new(
-            ErrorCode::AdapterMissing,
-            format!("adapter binary not found: {}", adapter_kind.as_str()),
-        ));
-    }
-    if adapter_kind == WorkerAdapterKind::Octoscode {
-        let octo = OctoscodeAdapter::new(&cfg.file.worker.octoscode_bin);
-        octo.resolve_bin()?;
-        if !octo.has_yolo_flag()? {
-            return Err(WanaxError::new(
-                ErrorCode::AdapterMissing,
-                format!(
-                    "adapter binary not found: {} (--yolo missing)",
-                    cfg.file.worker.octoscode_bin
-                ),
-            ));
-        }
-    }
-    if adapter_kind == WorkerAdapterKind::Cmd {
-        CmdAdapter::new(
-            cfg.file.worker.cmd.clone(),
-            cfg.file.worker.cmd_args.clone(),
-        )
-        .resolve_bin()?;
-    }
+    preflight_adapter(adapter_kind, &cfg)?;
 
     let contract_abs = if opts.contract.is_absolute() {
         opts.contract.clone()
@@ -124,7 +102,15 @@ pub async fn start(opts: StartOpts) -> Result<(), WanaxError> {
     let store = Store::open(&opts.data_dir.join("wanax.db")).await?;
 
     let run_id = new_id();
-    let lock = RepoLock::acquire(&repo, &run_id)?;
+    let lock = RepoLock::acquire_with(
+        &repo,
+        &run_id,
+        &LockAcquire {
+            exclusive: cfg.file.lock.repo_exclusive,
+            paths: contract.allowed_globs.clone(),
+            resume: false,
+        },
+    )?;
 
     let result = run_factory(
         &store,
@@ -175,15 +161,18 @@ pub async fn resume(opts: ResumeOpts) -> Result<(), WanaxError> {
     }
     let cfg = load_merged_config(&repo, &opts.data_dir)?;
     let adapter_kind = opts.adapter.unwrap_or(run.worker_adapter);
-    if !adapter_kind.is_phase1() {
-        return Err(WanaxError::new(
-            ErrorCode::AdapterMissing,
-            format!("adapter binary not found: {}", adapter_kind.as_str()),
-        ));
-    }
+    preflight_adapter(adapter_kind, &cfg)?;
     let contract = store.get_contract(&run.contract_id).await?;
     let contract_abs = repo.join(&contract.path);
-    let lock = RepoLock::acquire_for_resume(&repo, &run.id)?;
+    let lock = RepoLock::acquire_with(
+        &repo,
+        &run.id,
+        &LockAcquire {
+            exclusive: cfg.file.lock.repo_exclusive,
+            paths: contract.allowed_globs.clone(),
+            resume: true,
+        },
+    )?;
     run.start_pid = Some(i64::from(std::process::id()));
     store.save_run_progress(&run).await?;
     println!("{}", run.id);
@@ -896,7 +885,14 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 }
                 store.set_state(&mut run, RunState::Accepted, None).await?;
                 println!("state={}", run.state.as_str());
-                write_result(repo, &run.id, "accept", &receipt.commit_sha, &test.excerpt)?;
+                write_result(
+                    repo,
+                    &run.id,
+                    "accept",
+                    &receipt.commit_sha,
+                    &test.excerpt,
+                    run.spent_usd_micros,
+                )?;
                 println!("{}", run.inner_branch);
                 if let Ok(stat) = diff_stat(repo, &base_sha, &receipt.commit_sha) {
                     println!("{stat}");
@@ -921,7 +917,14 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             VerdictDecision::Reject => {
                 store.set_state(&mut run, RunState::Rejected, None).await?;
                 println!("state={}", run.state.as_str());
-                write_result(repo, &run.id, "reject", &receipt.commit_sha, &test.excerpt)?;
+                write_result(
+                    repo,
+                    &run.id,
+                    "reject",
+                    &receipt.commit_sha,
+                    &test.excerpt,
+                    run.spent_usd_micros,
+                )?;
                 break Err(WanaxError::new(
                     if boundary.ok {
                         ErrorCode::WorkerCrash
@@ -1671,10 +1674,66 @@ async fn start_adapter(
             .start(ctx)
             .await
         }
-        _ => Err(WanaxError::new(
+        WorkerAdapterKind::Claude => {
+            ClaudeAdapter::new(
+                cfg.file.worker.claude_bin.clone(),
+                cfg.file.worker.claude_args.clone(),
+            )
+            .start(ctx)
+            .await
+        }
+        WorkerAdapterKind::Codex => {
+            CodexAdapter::new(
+                cfg.file.worker.codex_bin.clone(),
+                cfg.file.worker.codex_args.clone(),
+            )
+            .start(ctx)
+            .await
+        }
+    }
+}
+
+fn preflight_adapter(adapter_kind: WorkerAdapterKind, cfg: &ResolvedConfig) -> Result<(), WanaxError> {
+    if !adapter_kind.is_supported() {
+        return Err(WanaxError::new(
             ErrorCode::AdapterMissing,
             format!("adapter binary not found: {}", adapter_kind.as_str()),
-        )),
+        ));
+    }
+    match adapter_kind {
+        WorkerAdapterKind::Octoscode => {
+            let octo = OctoscodeAdapter::new(&cfg.file.worker.octoscode_bin);
+            octo.resolve_bin()?;
+            if !octo.has_yolo_flag()? {
+                return Err(WanaxError::new(
+                    ErrorCode::AdapterMissing,
+                    format!(
+                        "adapter binary not found: {} (--yolo missing)",
+                        cfg.file.worker.octoscode_bin
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        WorkerAdapterKind::Cmd => CmdAdapter::new(
+            cfg.file.worker.cmd.clone(),
+            cfg.file.worker.cmd_args.clone(),
+        )
+        .resolve_bin()
+        .map(|_| ()),
+        WorkerAdapterKind::Claude => ClaudeAdapter::new(
+            cfg.file.worker.claude_bin.clone(),
+            cfg.file.worker.claude_args.clone(),
+        )
+        .resolve_bin()
+        .map(|_| ()),
+        WorkerAdapterKind::Codex => CodexAdapter::new(
+            cfg.file.worker.codex_bin.clone(),
+            cfg.file.worker.codex_args.clone(),
+        )
+        .resolve_bin()
+        .map(|_| ()),
+        WorkerAdapterKind::Fake => Ok(()),
     }
 }
 
@@ -1820,9 +1879,13 @@ fn write_result(
     decision: &str,
     sha: &str,
     excerpt: &str,
+    spent_usd_micros: i64,
 ) -> Result<(), WanaxError> {
     let path = run_dir(repo, run_id).join("RESULT.md");
-    let body = format!("# Result\n\ndecision: {decision}\nsha: {sha}\n\n```\n{excerpt}\n```\n");
+    let body = format!(
+        "# Result\n\ndecision: {decision}\nsha: {sha}\nspent_usd: {}\n\n```\n{excerpt}\n```\n",
+        wanax_core::money::format_usd_4(spent_usd_micros)
+    );
     fs::write(path, body).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
     Ok(())
 }

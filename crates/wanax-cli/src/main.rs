@@ -32,6 +32,8 @@ enum AdapterArg {
     Octoscode,
     Fake,
     Cmd,
+    Claude,
+    Codex,
 }
 
 impl From<AdapterArg> for WorkerAdapterKind {
@@ -40,6 +42,8 @@ impl From<AdapterArg> for WorkerAdapterKind {
             AdapterArg::Octoscode => Self::Octoscode,
             AdapterArg::Fake => Self::Fake,
             AdapterArg::Cmd => Self::Cmd,
+            AdapterArg::Claude => Self::Claude,
+            AdapterArg::Codex => Self::Codex,
         }
     }
 }
@@ -79,6 +83,9 @@ enum Commands {
     },
     Verdict {
         run_id: String,
+    },
+    Cost {
+        run_id: Option<String>,
     },
 }
 
@@ -129,6 +136,7 @@ async fn run() -> Result<(), WanaxError> {
         }
         Commands::Doctor { fix_lock, strict } => doctor::run(fix_lock, strict, &data_dir).await,
         Commands::Verdict { run_id } => print_verdict(data_dir, run_id).await,
+        Commands::Cost { run_id } => print_cost(data_dir, run_id).await,
     }
 }
 
@@ -231,6 +239,77 @@ fn last_event_at(repo_root: &str, run_id: &str) -> Option<String> {
     env.events.last().map(|e| e.at.clone())
 }
 
+async fn print_cost(data_dir: PathBuf, run_id: Option<String>) -> Result<(), WanaxError> {
+    let store = open_store(data_dir).await?;
+    match run_id {
+        None => {
+            let runs = store.list_runs().await?;
+            if runs.is_empty() {
+                println!("{}", i18n::t("no_runs"));
+                return Ok(());
+            }
+            println!("{}", i18n::t("cost_header"));
+            for run in runs {
+                println!(
+                    "{:<32} {:<18} {:<10} {:<22} {:<18} {:<10} {:<6}",
+                    run.id,
+                    run.state.as_str(),
+                    run.worker_adapter.as_str(),
+                    run.commander_model,
+                    run.inner_model,
+                    format_usd_4(run.spent_usd_micros),
+                    run.spent_inner_turns
+                );
+            }
+            Ok(())
+        }
+        Some(id) => {
+            let run = store.get_run(&id).await?;
+            println!("run_id={}", run.id);
+            println!("state={}", run.state.as_str());
+            println!("adapter={}", run.worker_adapter.as_str());
+            println!("commander_model={}", run.commander_model);
+            println!("inner_model={}", run.inner_model);
+            println!("spent_usd={}", format_usd_4(run.spent_usd_micros));
+            println!("spent_turns={}", run.spent_inner_turns);
+            if let Ok(env) = wanax_tombstone::load_envelope(
+                std::path::Path::new(&run.repo_root),
+                &run.id,
+            ) {
+                for ev in env
+                    .events
+                    .iter()
+                    .filter(|e| matches!(e.kind, wanax_tombstone::EventKind::BudgetTick))
+                {
+                    let estimated = ev
+                        .payload
+                        .get("cost_estimated")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let micros = ev
+                        .payload
+                        .get("spent_usd_micros")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    print!(
+                        "tick at={} spent_usd={} estimated={estimated}",
+                        ev.at,
+                        format_usd_4(micros)
+                    );
+                    if let Some(p) = ev.payload.get("prompt_tokens").and_then(|v| v.as_u64()) {
+                        print!(" prompt_tokens={p}");
+                    }
+                    if let Some(c) = ev.payload.get("completion_tokens").and_then(|v| v.as_u64()) {
+                        print!(" completion_tokens={c}");
+                    }
+                    println!();
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 async fn print_verdict(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
     let store = open_store(data_dir).await?;
     let _run = store.get_run(&run_id).await?;
@@ -257,15 +336,7 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
     let mut run = store.get_run(&run_id).await?;
     if run.state.is_terminal() {
         let path = std::path::Path::new(&run.repo_root);
-        if wanax_core::lock::RepoLock::lock_path(path).exists() {
-            if let Ok(info) =
-                wanax_core::lock::read_lock(&wanax_core::lock::RepoLock::lock_path(path))
-            {
-                if info.run_id == run.id && !wanax_core::pid_alive(info.pid) {
-                    let _ = std::fs::remove_file(wanax_core::lock::RepoLock::lock_path(path));
-                }
-            }
-        }
+        let _ = wanax_core::lock::release_run_lock(path, &run.id);
         return Ok(());
     }
     let _ = store
@@ -317,9 +388,6 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
         ));
         let _ = wanax_tombstone::persist_envelope(&repo, &env);
     }
-    let lock_path = wanax_core::lock::RepoLock::lock_path(&repo);
-    if lock_path.exists() {
-        let _ = std::fs::remove_file(lock_path);
-    }
+    let _ = wanax_core::lock::release_run_lock(&repo, &run_id);
     Ok(())
 }

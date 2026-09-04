@@ -62,6 +62,9 @@ pub fn t(key: &str) -> &'static str {
         (Lang::Zh, "plugin_ok") => "插件 agent-spec: 正常",
         (Lang::Zh, "plugin_missing") => "插件 agent-spec: 缺失",
         (Lang::Zh, "plugin_off") => "插件 agent-spec: 未启用",
+        (Lang::Zh, "cost_header") => {
+            "运行                               状态                 适配器       指挥                   内环                 美元       回合"
+        }
         (Lang::En, "no_runs") => "No runs.",
         (Lang::En, "no_verdict") => "No verdict.",
         (Lang::En, "status_header") => {
@@ -82,6 +85,9 @@ pub fn t(key: &str) -> &'static str {
         (Lang::En, "plugin_ok") => "plugin agent-spec: ok",
         (Lang::En, "plugin_missing") => "plugin agent-spec: missing",
         (Lang::En, "plugin_off") => "plugin agent-spec: off",
+        (Lang::En, "cost_header") => {
+            "Run                              State              Adapter    Commander              Inner              USD        Turns"
+        }
         (_, _) => "",
     }
 }

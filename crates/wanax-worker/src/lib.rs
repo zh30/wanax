@@ -580,6 +580,203 @@ impl WorkerAdapter for CmdAdapter {
     }
 }
 
+const CLAUDE_FLAGS: &[&str] = &["-p", "--dangerously-skip-permissions"];
+const CODEX_FLAGS: &[&str] = &["exec", "--sandbox", "workspace-write", "-"];
+
+pub struct ClaudeAdapter {
+    pub bin: String,
+    pub extra_args: Vec<String>,
+}
+
+impl ClaudeAdapter {
+    pub fn new(bin: impl Into<String>, extra_args: Vec<String>) -> Self {
+        Self {
+            bin: bin.into(),
+            extra_args,
+        }
+    }
+
+    pub fn resolve_bin(&self) -> Result<PathBuf, WanaxError> {
+        resolve_cmd_bin(&self.bin)
+    }
+
+    pub fn argv(&self) -> Vec<String> {
+        let mut args: Vec<String> = CLAUDE_FLAGS.iter().map(|s| (*s).to_string()).collect();
+        args.extend(self.extra_args.iter().cloned());
+        args
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for ClaudeAdapter {
+    async fn start(&self, ctx: &WorkerContext) -> Result<WorkerHandle, WanaxError> {
+        let bin = self.resolve_bin()?;
+        start_stdin_cli(bin, &self.argv(), ctx, "claude").await
+    }
+
+    async fn status(&self, _handle: &WorkerHandle) -> Result<WorkerStatus, WanaxError> {
+        Ok(WorkerStatus::Exited)
+    }
+
+    async fn cancel(&self, handle: &WorkerHandle) -> Result<(), WanaxError> {
+        cancel_pid(handle.pid)
+    }
+
+    async fn collect_receipt(
+        &self,
+        ctx: &WorkerContext,
+        handle: &WorkerHandle,
+    ) -> Result<Receipt, WanaxError> {
+        receipt_from_handle(ctx, handle, "claude")
+    }
+}
+
+pub struct CodexAdapter {
+    pub bin: String,
+    pub extra_args: Vec<String>,
+}
+
+impl CodexAdapter {
+    pub fn new(bin: impl Into<String>, extra_args: Vec<String>) -> Self {
+        Self {
+            bin: bin.into(),
+            extra_args,
+        }
+    }
+
+    pub fn resolve_bin(&self) -> Result<PathBuf, WanaxError> {
+        resolve_cmd_bin(&self.bin)
+    }
+
+    pub fn argv(&self) -> Vec<String> {
+        let mut args: Vec<String> = CODEX_FLAGS.iter().map(|s| (*s).to_string()).collect();
+        args.extend(self.extra_args.iter().cloned());
+        args
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for CodexAdapter {
+    async fn start(&self, ctx: &WorkerContext) -> Result<WorkerHandle, WanaxError> {
+        let bin = self.resolve_bin()?;
+        start_stdin_cli(bin, &self.argv(), ctx, "codex").await
+    }
+
+    async fn status(&self, _handle: &WorkerHandle) -> Result<WorkerStatus, WanaxError> {
+        Ok(WorkerStatus::Exited)
+    }
+
+    async fn cancel(&self, handle: &WorkerHandle) -> Result<(), WanaxError> {
+        cancel_pid(handle.pid)
+    }
+
+    async fn collect_receipt(
+        &self,
+        ctx: &WorkerContext,
+        handle: &WorkerHandle,
+    ) -> Result<Receipt, WanaxError> {
+        receipt_from_handle(ctx, handle, "codex")
+    }
+}
+
+fn cancel_pid(pid: u32) -> Result<(), WanaxError> {
+    if pid > 0 {
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+    Ok(())
+}
+
+fn receipt_from_handle(
+    ctx: &WorkerContext,
+    handle: &WorkerHandle,
+    adapter: &str,
+) -> Result<Receipt, WanaxError> {
+    Ok(Receipt {
+        id: wanax_core::new_id(),
+        work_unit_id: ctx.work_unit_id.clone(),
+        changed_files: Vec::new(),
+        diffstat: String::new(),
+        commit_sha: String::new(),
+        test_command: ctx.test_command.clone(),
+        test_exit_code: handle.test_exit_code,
+        test_excerpt: handle.test_excerpt.clone(),
+        claimed_pass: handle.claimed_pass,
+        duration_ms: handle.duration_ms,
+        adapter: adapter.into(),
+        raw_artifact_path: handle.raw_artifact_path.clone(),
+    })
+}
+
+async fn start_stdin_cli(
+    bin: PathBuf,
+    args: &[String],
+    ctx: &WorkerContext,
+    adapter: &str,
+) -> Result<WorkerHandle, WanaxError> {
+    use tokio::io::AsyncWriteExt;
+    let mut env = sanitized_env(ctx);
+    env.insert("WANAX_INSTRUCTION".into(), ctx.instruction.clone());
+    debug_assert!(!env_has_forbidden(&env));
+    let started = std::time::Instant::now();
+    let mut cmd = Command::new(&bin);
+    cmd.args(args)
+        .current_dir(&ctx.worktree)
+        .env_clear()
+        .envs(&env)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| {
+        WanaxError::new(
+            ErrorCode::AdapterMissing,
+            format!("adapter binary not found: {}: {e}", bin.display()),
+        )
+    })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(ctx.instruction.as_bytes())
+            .await
+            .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
+    }
+    let pid = child.id().unwrap_or(0);
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(u64::from(ctx.timeout_secs)),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| WanaxError::from_code(ErrorCode::WorkerTimeout))?
+    .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
+    if !out.status.success() {
+        return Err(WanaxError::from_code(ErrorCode::WorkerCrash));
+    }
+    let excerpt = {
+        let mut t = String::from_utf8_lossy(&out.stdout).into_owned();
+        t.push_str(&String::from_utf8_lossy(&out.stderr));
+        t.chars()
+            .rev()
+            .take(8000)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect()
+    };
+    let _ = adapter;
+    Ok(WorkerHandle {
+        pid,
+        claimed_pass: out.status.success(),
+        test_exit_code: out.status.code().unwrap_or(1),
+        test_excerpt: excerpt,
+        duration_ms: started.elapsed().as_millis() as u64,
+        turns: 1,
+        crashed: false,
+        timed_out: false,
+        raw_artifact_path: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,5 +872,72 @@ mod tests {
         };
         let err = adapter.start(&ctx).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::WorkerTimeout);
+    }
+
+    fn ctx_in(dir: &Path, instruction: &str) -> WorkerContext {
+        WorkerContext {
+            run_id: "wx_01AAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            work_unit_id: "wx_01BBBBBBBBBBBBBBBBBBBBBBBB".into(),
+            test_command: "cargo test".into(),
+            test_timeout_secs: 30,
+            worktree: dir.to_path_buf(),
+            instruction: instruction.into(),
+            adapter_name: "claude".into(),
+            extra_path: None,
+            timeout_secs: 10,
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_adapter_pipes_instruction_on_stdin_not_argv() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("claude");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat > stdin.txt\nprintf %s \"$*\" > args.txt\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let adapter = ClaudeAdapter::new(script.display().to_string(), Vec::new());
+        let ctx = ctx_in(dir.path(), "secret task body");
+        adapter.start(&ctx).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("stdin.txt")).unwrap(),
+            "secret task body"
+        );
+        let args = std::fs::read_to_string(dir.path().join("args.txt")).unwrap();
+        assert!(args.contains("-p"));
+        assert!(args.contains("--dangerously-skip-permissions"));
+        assert!(!args.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn codex_adapter_uses_exec_sandbox_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("codex");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat > stdin.txt\nprintf %s \"$*\" > args.txt\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let adapter = CodexAdapter::new(script.display().to_string(), Vec::new());
+        adapter.start(&ctx_in(dir.path(), "do the work")).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("stdin.txt")).unwrap(),
+            "do the work"
+        );
+        let args = std::fs::read_to_string(dir.path().join("args.txt")).unwrap();
+        assert!(args.contains("exec"));
+        assert!(args.contains("workspace-write"));
+        assert!(!args.contains("do the work"));
     }
 }

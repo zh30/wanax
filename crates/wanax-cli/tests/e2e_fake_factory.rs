@@ -169,6 +169,28 @@ impl Harness {
         fs::write(&p, t).unwrap();
     }
 
+    fn set_repo_exclusive(&self, exclusive: bool) {
+        let p = self.path().join(".wanax/config.toml");
+        let mut t = fs::read_to_string(&p).unwrap();
+        t = t.replace("repo_exclusive = true", "repo_exclusive = false");
+        if exclusive {
+            t = t.replace("repo_exclusive = false", "repo_exclusive = true");
+        }
+        fs::write(&p, t).unwrap();
+    }
+
+    fn set_adapter_claude(&self, bin: &Path) {
+        let p = self.path().join(".wanax/config.toml");
+        let mut t = fs::read_to_string(&p).unwrap();
+        t = t.replace("adapter = \"octoscode\"", "adapter = \"claude\"");
+        t = t.replace("adapter = \"fake\"", "adapter = \"claude\"");
+        t = t.replace(
+            "claude_bin = \"claude\"",
+            &format!("claude_bin = \"{}\"", bin.display()),
+        );
+        fs::write(&p, t).unwrap();
+    }
+
     fn set_adapter_cmd(&self, cmd: &Path) {
         let p = self.path().join(".wanax/config.toml");
         let mut t = fs::read_to_string(&p).unwrap();
@@ -221,6 +243,8 @@ fn init_on_git_repo_creates_files() {
     let gi = fs::read_to_string(h.path().join(".wanax/.gitignore")).unwrap();
     assert!(gi.contains("worktrees/"));
     assert!(gi.contains("LOCK"));
+    assert!(gi.contains("locks/"));
+    assert!(gi.contains("LOCKSET"));
 }
 
 #[test]
@@ -1528,6 +1552,340 @@ fn agent_spec_plugin_runs_on_outer() {
         e["kind"] == "state_changed" && e["payload"]["plugin"] == "agent-spec"
     });
     assert!(plugin_ev, "{env}");
+}
+
+fn split_contract(name: &str, allowed: &str, test_command: &str) -> String {
+    format!(
+        r#"---
+spec: wanax.contract
+version: 1
+name: "{name}"
+test_command: "{test_command}"
+test_timeout_secs: 120
+allowed_globs:
+  - "{allowed}"
+forbidden_globs:
+  - "**/.env"
+---
+
+## Intent
+
+Implement {name}.
+
+## Decisions
+
+- Only change {allowed}
+
+## Boundaries
+
+- Allowed: {allowed}
+
+## Completion Criteria
+
+- CC-01: {test_command} exits 0
+"#
+    )
+}
+
+fn write_split_crate(dir: &Path) {
+    fs::write(
+        dir.join("src/lib.rs"),
+        "pub mod a;\npub mod b;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_a() { assert_eq!(crate::a::value(), 1); }\n    #[test]\n    fn test_b() { assert_eq!(crate::b::value(), 2); }\n}\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/a.rs"), "pub fn value() -> i32 { unimplemented!() }\n").unwrap();
+    fs::write(dir.join("src/b.rs"), "pub fn value() -> i32 { unimplemented!() }\n").unwrap();
+}
+
+fn wait_for_path_set_lock(repo: &Path) -> bool {
+    let dir = repo.join(".wanax/locks");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        if dir.is_dir() {
+            if let Ok(rd) = fs::read_dir(&dir) {
+                if rd.filter_map(Result::ok).any(|e| e.path().is_file()) {
+                    return true;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+#[test]
+fn claude_adapter_accepts() {
+    let h = Harness::new();
+    let script = install_cmd_script(
+        h.data.path(),
+        "claude",
+        &format!(
+            "#!/bin/sh\nset -eu\ncat >/dev/null\ncat > src/lib.rs << 'EOF'\n{GOOD_LIB}EOF\n"
+        ),
+    );
+    h.set_adapter_claude(&script);
+    h.write_contract(&contract("src/**"));
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "claude",
+        ],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+}
+
+#[test]
+fn cost_lists_run_and_result_has_spent() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let start = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        0,
+    );
+    assert!(start.stdout.contains("state=accepted"), "{}", start.stdout);
+    let run_id = start
+        .stdout
+        .lines()
+        .find(|l| l.starts_with("wx_"))
+        .expect("run id");
+    let cost = h.run(&["cost"], 0);
+    assert!(cost.stdout.contains(run_id), "{}", cost.stdout);
+    assert!(
+        cost.stdout.contains("USD") || cost.stdout.contains("美元") || cost.stdout.contains("0.0000"),
+        "{}",
+        cost.stdout
+    );
+    let detail = h.run(&["cost", run_id], 0);
+    assert!(detail.stdout.contains("spent_usd="), "{}", detail.stdout);
+    let result = find_file(h.path(), "RESULT.md").expect("RESULT.md");
+    let body = fs::read_to_string(result).unwrap();
+    assert!(body.contains("spent_usd:"), "{body}");
+}
+
+#[test]
+fn path_set_disjoint_runs_and_overlap_locked() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.set_repo_exclusive(false);
+    write_split_crate(h.path());
+    git(h.path(), &["add", "src/lib.rs", "src/a.rs", "src/b.rs"]);
+    git(h.path(), &["commit", "-m", "split crate"]);
+    fs::write(
+        h.path().join("specs/a.contract.md"),
+        split_contract("mod-a", "src/a.rs", "cargo test test_a"),
+    )
+    .unwrap();
+    fs::write(
+        h.path().join("specs/b.contract.md"),
+        split_contract("mod-b", "src/b.rs", "cargo test test_b"),
+    )
+    .unwrap();
+    git(
+        h.path(),
+        &["add", "specs/a.contract.md", "specs/b.contract.md"],
+    );
+    git(h.path(), &["commit", "-m", "split contracts"]);
+
+    let fake_a = h.data.path().join("fake-a.toml");
+    fs::write(
+        &fake_a,
+        "turns = 1\nrun_tests = false\nsleep_ms = 8000\n\n[[writes]]\npath = \"src/a.rs\"\ncontent = '''pub fn value() -> i32 { 1 }\n'''\n",
+    )
+    .unwrap();
+    let fake_b = h.data.path().join("fake-b.toml");
+    fs::write(
+        &fake_b,
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/b.rs\"\ncontent = '''pub fn value() -> i32 { 2 }\n'''\n",
+    )
+    .unwrap();
+    let fake_overlap = h.data.path().join("fake-overlap.toml");
+    fs::write(
+        &fake_overlap,
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/a.rs\"\ncontent = '''pub fn value() -> i32 { 1 }\n'''\n",
+    )
+    .unwrap();
+
+    let child_a = {
+        let mut cmd = wanax();
+        cmd.args([
+            "start",
+            "--contract",
+            "specs/a.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_DATA_DIR", h.data.path())
+        .env("WANAX_FAKE_SPEC", &fake_a)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+        cmd.spawn().unwrap()
+    };
+    assert!(
+        wait_for_path_set_lock(h.path()),
+        "first path-set lock never appeared"
+    );
+
+    let overlap = {
+        let mut cmd = wanax();
+        cmd.args([
+            "start",
+            "--contract",
+            "specs/a.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_DATA_DIR", h.data.path())
+        .env("WANAX_FAKE_SPEC", &fake_overlap)
+        .output()
+        .unwrap()
+    };
+    let overlap_err = String::from_utf8_lossy(&overlap.stderr);
+    assert_eq!(overlap.status.code(), Some(6), "{overlap_err}");
+    assert!(overlap_err.contains("E_REPO_LOCKED"), "{overlap_err}");
+
+    let b = {
+        let mut cmd = wanax();
+        cmd.args([
+            "start",
+            "--contract",
+            "specs/b.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_DATA_DIR", h.data.path())
+        .env("WANAX_FAKE_SPEC", &fake_b)
+        .output()
+        .unwrap()
+    };
+    let b_out = String::from_utf8_lossy(&b.stdout);
+    let b_err = String::from_utf8_lossy(&b.stderr);
+    assert_eq!(b.status.code(), Some(0), "stdout={b_out} stderr={b_err}");
+    assert!(b_out.contains("state=accepted"), "{b_out}");
+
+    let a = child_a.wait_with_output().unwrap();
+    let a_out = String::from_utf8_lossy(&a.stdout);
+    let a_err = String::from_utf8_lossy(&a.stderr);
+    assert_eq!(a.status.code(), Some(0), "stdout={a_out} stderr={a_err}");
+    assert!(a_out.contains("state=accepted"), "{a_out}");
+}
+
+#[test]
+fn resume_without_id_fails_when_two_active() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.set_repo_exclusive(false);
+    write_split_crate(h.path());
+    git(h.path(), &["add", "src/lib.rs", "src/a.rs", "src/b.rs"]);
+    git(h.path(), &["commit", "-m", "split crate"]);
+    fs::write(
+        h.path().join("specs/a.contract.md"),
+        split_contract("mod-a", "src/a.rs", "cargo test test_a"),
+    )
+    .unwrap();
+    fs::write(
+        h.path().join("specs/b.contract.md"),
+        split_contract("mod-b", "src/b.rs", "cargo test test_b"),
+    )
+    .unwrap();
+    git(
+        h.path(),
+        &["add", "specs/a.contract.md", "specs/b.contract.md"],
+    );
+    git(h.path(), &["commit", "-m", "split contracts"]);
+    let fake_a = h.data.path().join("fake-a.toml");
+    fs::write(
+        &fake_a,
+        "turns = 1\nrun_tests = false\nsleep_ms = 15000\n\n[[writes]]\npath = \"src/a.rs\"\ncontent = '''pub fn value() -> i32 { 1 }\n'''\n",
+    )
+    .unwrap();
+    let fake_b = h.data.path().join("fake-b.toml");
+    fs::write(
+        &fake_b,
+        "turns = 1\nrun_tests = false\nsleep_ms = 15000\n\n[[writes]]\npath = \"src/b.rs\"\ncontent = '''pub fn value() -> i32 { 2 }\n'''\n",
+    )
+    .unwrap();
+
+    let mut child_a = {
+        let mut cmd = wanax();
+        cmd.args([
+            "start",
+            "--contract",
+            "specs/a.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_DATA_DIR", h.data.path())
+        .env("WANAX_FAKE_SPEC", &fake_a)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+        cmd.spawn().unwrap()
+    };
+    assert!(wait_for_path_set_lock(h.path()));
+    let mut child_b = {
+        let mut cmd = wanax();
+        cmd.args([
+            "start",
+            "--contract",
+            "specs/b.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_DATA_DIR", h.data.path())
+        .env("WANAX_FAKE_SPEC", &fake_b)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+        cmd.spawn().unwrap()
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let mut two = false;
+    while std::time::Instant::now() < deadline {
+        if let Ok(rd) = fs::read_dir(h.path().join(".wanax/locks")) {
+            if rd.filter_map(Result::ok).filter(|e| e.path().is_file()).count() >= 2 {
+                two = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(two, "expected two path-set locks");
+    let resume = h.run(&["resume"], 1);
+    assert!(
+        resume.stderr.contains("E_RESUME"),
+        "stdout={} stderr={}",
+        resume.stdout,
+        resume.stderr
+    );
+    let _ = child_a.kill();
+    let _ = child_b.kill();
+    let _ = child_a.wait();
+    let _ = child_b.wait();
 }
 
 fn find_file(root: &Path, name: &str) -> Option<PathBuf> {

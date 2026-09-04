@@ -157,10 +157,15 @@ base_url = "https://api.openai.com/v1"
 # empty → self-review is mechanical only (tombstone: self_review=degraded)
 
 [worker]
-adapter = "octoscode"   # octoscode | fake | cmd
+adapter = "octoscode"   # octoscode | fake | cmd | claude | codex
 octoscode_bin = "octoscode"
+claude_bin = "claude"
+codex_bin = "codex"
 # cmd = "my-agent"       # PATH name or absolute path when adapter = "cmd"
 # cmd_args = []          # optional; instruction is WANAX_INSTRUCTION, not argv
+
+[lock]
+repo_exclusive = true   # false → path-set lock on allowed_globs; disjoint runs may overlap in time
 
 [budget]
 max_usd = "5.00"
@@ -223,9 +228,10 @@ Keep binding tests **outside** `allowed_globs`. If the tests live in `src/lib.rs
 | Command | Purpose |
 |---|---|
 | `wanax init [--force]` | Create `.wanax/` and an example contract |
-| `wanax start --contract <path> [--adapter octoscode\|fake\|cmd] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
+| `wanax start --contract <path> [--adapter octoscode\|fake\|cmd\|claude\|codex] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
 | `wanax resume [run_id]` | Continue an interrupted non-terminal run (takes over a stale LOCK) |
 | `wanax status [run_id]` | State, spend, current unit, last event |
+| `wanax cost [run_id]` | Local spend board from SQLite / tombstone ticks (no network) |
 | `wanax cancel <run_id>` | SIGTERM the worker, keep the tombstone, release the lock |
 | `wanax verdict <run_id>` | Print the last outer verdict |
 | `wanax doctor [--strict] [--fix-lock]` | Git, adapter, keys (presence only), stale lock, disk |
@@ -247,19 +253,19 @@ Git artifacts: `wanax/<run_id>/inner` and `wanax/<run_id>/outer`. Inner worktree
 
 ## Current status
 
-Implemented through **Phase 4** of [`docs/PRD.md`](docs/PRD.md):
+Implemented through **Phase 5** of [`docs/PRD.md`](docs/PRD.md):
 
 - One work unit per run by default; Commander may emit a peer batch or a WorkUnit DAG
 - Goal loop (`plan → edit → test → self_review`, max 8)
 - Outer retest on a fresh worktree, glob boundaries, USD + turn budget
 - HTTP commander (Anthropic Messages or OpenAI-compatible Chat Completions)
 - Cassette fixtures via `WANAX_LLM_FIXTURE_DIR` (CI does not call a paid API)
-- Workers: `octoscode`, `fake`, `cmd` (generic subprocess; instruction via `WANAX_INSTRUCTION`; example wrappers in `scripts/workers/`)
+- Workers: `octoscode`, `fake`, `cmd`, first-class `claude` / `codex` (instruction on stdin; `.sh` wrappers remain examples)
 - Goal stops when a red inner test makes no file progress; expensive commander verdict runs only when FR-014 gates are green
 - Peer worktrees with overlap rejection and cherry-pick recovery; optional `gh pr create` after accept
 - `wanax resume` after a crash / stale lock; `--lang zh`; optional `agent-spec lifecycle` plugin (`[verify] plugins = ["agent-spec"]`)
-
-Dedicated Claude/Codex adapters are still wrappers via `cmd`, not first-class binaries.
+- Opt-in path-set multi-run (`[lock] repo_exclusive = false`); `wanax cost` local spend board
+- CI: Ubuntu 24.04 + macOS, `cargo build --locked`
 
 ## Development
 

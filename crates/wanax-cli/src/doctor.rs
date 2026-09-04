@@ -2,7 +2,7 @@ use std::path::Path;
 use wanax_core::config::load_merged_config;
 use wanax_core::contract::parse_contract_file;
 use wanax_core::error::{ErrorCode, WanaxError};
-use wanax_core::lock::inspect_lock;
+use wanax_core::lock::inspect_locks;
 use wanax_core::{clear_stale_lock, Store};
 use wanax_git::is_git_repo;
 use wanax_verify::allowed_globs_cover_binding_tests;
@@ -28,40 +28,64 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         .as_ref()
         .map(|c| c.file.worker.adapter.as_str())
         .unwrap_or("octoscode");
-    let adapter_bin = cfg
-        .as_ref()
-        .map(|c| c.file.worker.octoscode_bin.as_str())
-        .unwrap_or("octoscode");
-    if adapter_name == "fake" {
-        println!("adapter fake: {}", crate::i18n::t("adapter_ok"));
-    } else if adapter_name == "cmd" {
-        let cmd = cfg
-            .as_ref()
-            .map(|c| c.file.worker.cmd.as_str())
-            .unwrap_or("");
-        match wanax_worker::resolve_cmd_bin(cmd) {
-            Ok(_) => println!("adapter {cmd}: {}", crate::i18n::t("adapter_ok")),
-            Err(_) => println!("adapter {cmd}: {}", crate::i18n::t("adapter_missing")),
-        }
-    } else {
-        match which::which(adapter_bin) {
-            Ok(_) => {
-                let octo = wanax_worker::OctoscodeAdapter::new(adapter_bin);
-                match octo.has_yolo_flag() {
-                    Ok(true) => println!("adapter {adapter_bin}: {}", crate::i18n::t("adapter_ok")),
-                    Ok(false) => println!(
-                        "adapter {adapter_bin}: [NEEDS CLARIFICATION] --yolo flag not found"
-                    ),
-                    Err(_) => println!(
-                        "adapter {adapter_bin}: {}",
-                        crate::i18n::t("adapter_missing")
-                    ),
-                }
+    match adapter_name {
+        "fake" => println!("adapter fake: {}", crate::i18n::t("adapter_ok")),
+        "cmd" => {
+            let cmd = cfg
+                .as_ref()
+                .map(|c| c.file.worker.cmd.as_str())
+                .unwrap_or("");
+            match wanax_worker::resolve_cmd_bin(cmd) {
+                Ok(_) => println!("adapter {cmd}: {}", crate::i18n::t("adapter_ok")),
+                Err(_) => println!("adapter {cmd}: {}", crate::i18n::t("adapter_missing")),
             }
-            Err(_) => println!(
-                "adapter {adapter_bin}: {}",
-                crate::i18n::t("adapter_missing")
-            ),
+        }
+        "claude" => {
+            let bin = cfg
+                .as_ref()
+                .map(|c| c.file.worker.claude_bin.as_str())
+                .unwrap_or("claude");
+            match wanax_worker::resolve_cmd_bin(bin) {
+                Ok(_) => println!("adapter {bin}: {}", crate::i18n::t("adapter_ok")),
+                Err(_) => println!("adapter {bin}: {}", crate::i18n::t("adapter_missing")),
+            }
+        }
+        "codex" => {
+            let bin = cfg
+                .as_ref()
+                .map(|c| c.file.worker.codex_bin.as_str())
+                .unwrap_or("codex");
+            match wanax_worker::resolve_cmd_bin(bin) {
+                Ok(_) => println!("adapter {bin}: {}", crate::i18n::t("adapter_ok")),
+                Err(_) => println!("adapter {bin}: {}", crate::i18n::t("adapter_missing")),
+            }
+        }
+        _ => {
+            let adapter_bin = cfg
+                .as_ref()
+                .map(|c| c.file.worker.octoscode_bin.as_str())
+                .unwrap_or("octoscode");
+            match which::which(adapter_bin) {
+                Ok(_) => {
+                    let octo = wanax_worker::OctoscodeAdapter::new(adapter_bin);
+                    match octo.has_yolo_flag() {
+                        Ok(true) => {
+                            println!("adapter {adapter_bin}: {}", crate::i18n::t("adapter_ok"))
+                        }
+                        Ok(false) => println!(
+                            "adapter {adapter_bin}: [NEEDS CLARIFICATION] --yolo flag not found"
+                        ),
+                        Err(_) => println!(
+                            "adapter {adapter_bin}: {}",
+                            crate::i18n::t("adapter_missing")
+                        ),
+                    }
+                }
+                Err(_) => println!(
+                    "adapter {adapter_bin}: {}",
+                    crate::i18n::t("adapter_missing")
+                ),
+            }
         }
     }
 
@@ -90,25 +114,31 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         }
     );
 
-    match inspect_lock(&cwd) {
-            Ok(None) => println!("{}", crate::i18n::t("lock_none")),
-        Ok(Some((info, true))) => {
-            println!("lock: held run={} pid={}", info.run_id, info.pid);
-        }
-        Ok(Some((info, false))) => {
-            println!("lock: stale lock pid={} run={}", info.pid, info.run_id);
-            if fix_lock {
+    match inspect_locks(&cwd) {
+        Ok(locks) if locks.is_empty() => println!("{}", crate::i18n::t("lock_none")),
+        Ok(locks) => {
+            let any_stale = locks.iter().any(|(_, alive)| !alive);
+            for (info, alive) in &locks {
+                if *alive {
+                    println!("lock: held run={} pid={}", info.run_id, info.pid);
+                } else {
+                    println!("lock: stale lock pid={} run={}", info.pid, info.run_id);
+                }
+            }
+            if fix_lock && any_stale {
                 let cleared = clear_stale_lock(&cwd)?;
                 if let Ok(store) = Store::open(&data_dir.join("wanax.db")).await {
-                    if let Ok(mut run) = store.get_run(&cleared.run_id).await {
-                        if !run.state.is_terminal() {
-                            let _ = store
-                                .set_state(
-                                    &mut run,
-                                    wanax_core::RunState::Failed,
-                                    Some(format!("stale lock pid={}", cleared.pid)),
-                                )
-                                .await;
+                    for info in &cleared {
+                        if let Ok(mut run) = store.get_run(&info.run_id).await {
+                            if !run.state.is_terminal() {
+                                let _ = store
+                                    .set_state(
+                                        &mut run,
+                                        wanax_core::RunState::Failed,
+                                        Some(format!("stale lock pid={}", info.pid)),
+                                    )
+                                    .await;
+                            }
                         }
                     }
                 }

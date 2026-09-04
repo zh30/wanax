@@ -8,9 +8,9 @@
 | Crate / CLI | `wanax` |
 | Brand token | `wanax`（5 字母；crates.io / npm 精确包名均未占用，检索日 2026-08-30） |
 | Former working names | NightForge、antqueen、Ant Queen（均已废弃，禁止出现在代码、路径、环境变量） |
-| Version | 0.1.0 |
-| Date | 2026-08-30 |
-| Status | Draft — Implementation-Ready for Phase 1 |
+| Version | 0.2.0 |
+| Date | 2026-09-04 |
+| Status | Phase 1–5 implemented |
 | Author | Henry Zhang / Grok Team |
 | Audience | AI Coding Agent + Human implementer |
 | Language | 说明中文；标识符、schema、CLI、FR 编号一律英文 |
@@ -166,11 +166,13 @@ v1 用户不是大众消费者。是已经在用 coding agent 的独立开发者
 
 ### Future Considerations
 
-- GitHub Issue 为需求源（Orbi 模式）
-- `agent-spec` CLI 作为 L1–L3 验证器插件
-- Commander 可插拔：Claude Code / Codex / Fable 5
-- 多 Run 并行（需 repo 级锁升级为 path-set 锁）
-- 成本看板与模型路由策略学习
+- GitHub Issue 为需求源（Orbi 模式；开放问题默认不做，属另一条产品线）
+- `agent-spec` L1–L3 全级验证（Phase 4 已做可选 `lifecycle`）
+- Commander 进程可插拔：Claude Code / Codex / Fable 5 作为外环（不是 Worker）
+- 模型路由策略学习
+- Slack/Telegram 控制面
+
+Phase 5 已落地：一等 Claude/Codex WorkerAdapter、opt-in path-set 多 Run、本地 `wanax cost`、Ubuntu+macOS CI。
 
 ---
 
@@ -190,8 +192,9 @@ wanax (control plane, Rust)
   ├─ OuterCommander (LLM, no repo writes except tombstone)
   └─ WorkerSupervisor
         ├─ Adapter::Octoscode
-        ├─ Adapter::ClaudeCli    [P2]
-        ├─ Adapter::CodexCli     [P2]
+        ├─ Adapter::ClaudeCli    [Phase 5]
+        ├─ Adapter::CodexCli     [Phase 5]
+        ├─ Adapter::Cmd
         └─ Adapter::Fake         [test]
               ▼
         IsolatedWorktree (inner)
@@ -278,7 +281,7 @@ ID 规则：所有 ID 为 `wx_` 前缀 + ULID（26 char Crockford）。例：`wx
 | max_inner_turns | u32 | yes | 1–500 | 40 | |
 | spent_usd_micros | i64 | yes | ≥0 | 0 | |
 | spent_inner_turns | u32 | yes | ≥0 | 0 | |
-| worker_adapter | enum | yes | `octoscode` \| `fake` \| `claude` \| `codex` | `octoscode` | P0 实现前两个 |
+| worker_adapter | enum | yes | `octoscode` \| `fake` \| `cmd` \| `claude` \| `codex` | `octoscode` | Phase 5 起 Claude/Codex 一等 |
 | created_at | datetime | yes | RFC3339 | now | |
 | updated_at | datetime | yes | RFC3339 | now | |
 | finished_at | datetime | no | | null | |
@@ -380,14 +383,16 @@ draft → contract_ready → dispatched → inner_working → receipt_ready
 | inner.provider | string | yes | 同上 | — | |
 | inner.model | string | yes | 非空 | — | |
 | reviewer.model | string | no | | | 空则自审降级 |
-| worker.adapter | string | yes | `octoscode` `fake` | `octoscode` | |
+| worker.adapter | string | yes | `octoscode` `fake` `cmd` `claude` `codex` | `octoscode` | |
+| worker.claude_bin | string | no | which | `claude` | Phase 5 |
+| worker.codex_bin | string | no | which | `codex` | Phase 5 |
+| lock.repo_exclusive | bool | yes | | true | false 时按 allowed_globs 做 path-set 锁 |
 | worker.octoscode_bin | string | no | which | `octoscode` | |
 | worker.timeout_secs | u32 | yes | 30–14400 | 1800 | |
 | budget.max_usd | decimal string | yes | | `5.00` | 写入 DB 转 micros |
 | budget.max_inner_turns | u32 | yes | | 40 | |
 | git.protected_refs | string[] | yes | | `["main","master"]` | |
 | test.default_command | string | no | | `cargo test` | |
-| lock.repo_exclusive | bool | yes | | true | P0 必须 true |
 
 密钥只来自环境变量：`WANAX_COMMANDER_API_KEY`、`WANAX_INNER_API_KEY`。禁止写入 git。禁止写入 Tombstone。
 
@@ -397,7 +402,9 @@ draft → contract_ready → dispatched → inner_working → receipt_ready
 |---|---|---|---|---|---|
 | repo_root_real | string | yes | canonicalize | | |
 | run_id | string | yes | | | |
-| lock_path | string | yes | `<repo>/.wanax/LOCK` | | flock |
+| lock_path | string | yes | exclusive: `<repo>/.wanax/LOCK`；path-set: `<repo>/.wanax/locks/<run_id>` | | flock |
+| exclusive | bool | yes | | true | `lock.repo_exclusive=true` 或 paths 为空时 fail-closed 为 exclusive |
+| paths | string[] | no | contract `allowed_globs` | [] | path-set 模式下与其他 live/stale holder 做 glob 相交检查 |
 
 ---
 
@@ -640,6 +647,40 @@ Phase 1 硬限制：不拆多 WorkUnit。多单元是 Phase 2。
 - API key、`Authorization` 头必须 redaction
 - 不默认上报遥测
 
+### FR-026 一等 Claude / Codex WorkerAdapter（Phase 5）
+
+- Priority: P2
+- `--adapter claude|codex` 与 `worker.adapter` 直接拉起 `claude_bin` / `codex_bin`
+- 指令走 stdin（并设 `WANAX_INSTRUCTION`），禁止把 instruction 放进 argv
+- Claude 固定 flags：`-p --dangerously-skip-permissions`；Codex：`exec --sandbox workspace-write -`
+- doctor 探测对应二进制，不再误探 octoscode
+- 负向：二进制不在 PATH → `E_ADAPTER_MISSING`
+
+### FR-027 path-set 多 Run 锁（Phase 5）
+
+- Priority: P1
+- 默认 `lock.repo_exclusive = true`：行为与 FR-004 相同
+- `repo_exclusive = false`：按 contract `allowed_globs` 持有 `.wanax/locks/<run_id>`
+- 相交（含 stale holder）→ `E_REPO_LOCKED`；不相交可并行
+- 空 paths fail-closed 为 exclusive
+- exclusive LOCK 与任一 path-set holder 互斥
+- `resume` 不带 run_id 且同仓有 >1 个非终态 Run → `E_RESUME`
+- `cancel` / `doctor --fix-lock` 只清对应 holder / 所有 stale holder
+- start 仍不得悄悄清锁
+
+### FR-028 本地成本看板（Phase 5）
+
+- Priority: P2
+- `wanax cost [run_id]` 只读 SQLite + 可选 envelope `budget_tick`
+- 不联网、不做模型路由学习
+- accept/reject 的 `RESULT.md` 含 `spent_usd`
+
+### FR-029 CI（Phase 5）
+
+- Priority: P1
+- GitHub Actions：Ubuntu 24.04 + macOS（aarch64）
+- `cargo build --locked`、`cargo test --workspace`、`clippy -D warnings`
+
 ---
 
 ## Detailed User Flows
@@ -770,7 +811,7 @@ v1 无 GUI。组件是 CLI 与文件。
 | NFR-4 | 密钥泄漏 | 单测扫描 log/tombstone fixture，禁止出现 `sk-` `ghp_` 明文 |
 | NFR-5 | 崩溃一致性 | kill -9 后 DB 可打开，Run 处于合法状态或可被 doctor 标 failed |
 | NFR-6 | 二进制体积 | release 默认 features 不含 web；目标 < 20MB（不含静态 LLM） |
-| NFR-7 | OS | CI：Ubuntu 24.04 + macOS aarch64。Windows 不作为 P0 |
+| NFR-7 | OS | CI：Ubuntu 24.04 + macOS aarch64（Phase 5 workflow）。Windows 不作为 P0 |
 | NFR-8 | Rust | 1.85+，`cargo test` 全绿，clippy -D warnings |
 | NFR-9 | 并发 | P0 单 Run / repo。内部 tokio，worker 为子进程 |
 | NFR-10 | i18n | CLI 信息默认英文（便于日志搜索）；`--lang zh` 可选，P2。契约文件本身支持中英标题 |
@@ -875,6 +916,19 @@ octoscode_bin = "octoscode"
 - agent-spec `lifecycle` 作为可选 verifier plugin
 - 多 WorkUnit DAG
 
+### Phase 5 — 一等工人 + path-set 锁 + 本地成本
+
+范围：FR-026、027、028、029
+
+完成标准：
+
+- `--adapter claude|codex` 用假二进制在 CI 跑通 accept；instruction 不在 argv
+- `repo_exclusive=false` 时不相交契约可并行 accept；相交 → `E_REPO_LOCKED`；默认 exclusive 仍锁仓
+- `wanax cost` 列出 Run 花费；`RESULT.md` 含 `spent_usd`
+- CI workflow 覆盖 Ubuntu 24.04 与 macOS，`--locked` 构建
+
+明确不做：Issue 驱动、Commander 换成 Claude Code 进程、路由学习、TUI/SaaS/自动合入。
+
 每个 Phase 结束必须更新 Verification Checklist，未勾选不得开始下一 Phase。
 
 ---
@@ -963,6 +1017,15 @@ v1 不做产品分析埋点。
 - [x] 多 WorkUnit DAG 按依赖序执行
 - [x] 可选 agent-spec `lifecycle` verifier plugin
 
+### Phase 5
+
+- [x] `--adapter claude` / `codex` 为一等 WorkerAdapter（stdin 指令，不经 `.sh` 包装）
+- [x] `lock.repo_exclusive=false` 时不相交 allowed_globs 可同仓多 Run
+- [x] 相交 path-set → `E_REPO_LOCKED`；默认 exclusive 仍整仓互斥
+- [x] `resume` 在多个 active Run 时必须带 run_id
+- [x] `wanax cost` 只读本地花费；`RESULT.md` 含 `spent_usd`
+- [x] CI：Ubuntu 24.04 + macOS，`cargo build --locked` + test + clippy
+
 ---
 
 ## Appendix A — Contract 文件格式（P0 必须能 parse）
@@ -1044,7 +1107,11 @@ wanax status [run_id]
 wanax cancel <run_id>
 wanax doctor [--fix-lock] [--strict]
 wanax verdict <run_id>          # 只读打印最近 Verdict，P0 不提供人工覆盖 accept
+wanax resume [run_id]
+wanax cost [run_id]             # 本地花费看板，不上报
 ```
+
+`start` / `resume` 的 `--adapter`：`octoscode|fake|cmd|claude|codex`。
 
 P0 **禁止** `wanax accept` 人工强行盖章绕过测试。人要合入就自己 git merge 分支。
 
