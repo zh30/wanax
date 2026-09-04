@@ -83,6 +83,7 @@ impl Store {
                 state TEXT NOT NULL,
                 assignee_role TEXT NOT NULL,
                 parent_id TEXT,
+                allowed_globs TEXT,
                 rework_count INTEGER NOT NULL,
                 inner_commit_sha TEXT,
                 receipt_id TEXT,
@@ -119,6 +120,21 @@ impl Store {
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        let _ = sqlx::query("ALTER TABLE work_units ADD COLUMN allowed_globs TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE work_units ADD COLUMN depends_on TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE work_units ADD COLUMN test_command TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE work_units ADD COLUMN local_key TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE contracts ADD COLUMN agent_spec TEXT")
+            .execute(&self.pool)
+            .await;
         Ok(())
     }
 
@@ -126,8 +142,9 @@ impl Store {
         sqlx::query(
             r#"INSERT INTO contracts
             (id, path, content_sha256, intent, decisions, allowed_globs, forbidden_globs,
-             forbidden_rules, completion_criteria, test_command, test_timeout_secs, name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+             forbidden_rules, completion_criteria, test_command, test_timeout_secs, name,
+             agent_spec)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&c.id)
         .bind(&c.path)
@@ -141,6 +158,7 @@ impl Store {
         .bind(&c.test_command)
         .bind(c.test_timeout_secs as i64)
         .bind(&c.name)
+        .bind(&c.agent_spec)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -165,6 +183,7 @@ impl Store {
             test_command: row.try_get("test_command")?,
             test_timeout_secs: row.try_get::<i64, _>("test_timeout_secs")? as u32,
             name: row.try_get("name")?,
+            agent_spec: row.try_get("agent_spec").ok().flatten(),
         })
     }
 
@@ -254,12 +273,13 @@ impl Store {
     pub async fn save_run_progress(&self, run: &FactoryRun) -> Result<(), WanaxError> {
         sqlx::query(
             r#"UPDATE factory_runs SET updated_at=?, spent_usd_micros=?, spent_inner_turns=?,
-               worker_pid=?, last_error=? WHERE id=?"#,
+               worker_pid=?, start_pid=?, last_error=? WHERE id=?"#,
         )
         .bind(now_rfc3339())
         .bind(run.spent_usd_micros)
         .bind(run.spent_inner_turns as i64)
         .bind(run.worker_pid)
+        .bind(run.start_pid)
         .bind(&run.last_error)
         .bind(&run.id)
         .execute(&self.pool)
@@ -271,8 +291,9 @@ impl Store {
         sqlx::query(
             r#"INSERT INTO work_units
             (id, run_id, seq, title, instruction, state, assignee_role, parent_id,
-             rework_count, inner_commit_sha, receipt_id, verdict_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+             allowed_globs, depends_on, test_command, local_key, rework_count,
+             inner_commit_sha, receipt_id, verdict_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&u.id)
         .bind(&u.run_id)
@@ -282,6 +303,10 @@ impl Store {
         .bind(u.state.as_str())
         .bind(u.assignee_role.as_str())
         .bind(&u.parent_id)
+        .bind(optional_json(&u.allowed_globs)?)
+        .bind(to_json(&u.depends_on)?)
+        .bind(&u.test_command)
+        .bind(&u.local_key)
         .bind(u.rework_count as i64)
         .bind(&u.inner_commit_sha)
         .bind(&u.receipt_id)
@@ -293,20 +318,41 @@ impl Store {
 
     pub async fn update_work_unit(&self, u: &WorkUnit) -> Result<(), WanaxError> {
         sqlx::query(
-            r#"UPDATE work_units SET title=?, instruction=?, state=?, rework_count=?,
-               inner_commit_sha=?, receipt_id=?, verdict_id=? WHERE id=?"#,
+            r#"UPDATE work_units SET title=?, instruction=?, state=?, assignee_role=?,
+               rework_count=?, inner_commit_sha=?, receipt_id=?, verdict_id=?,
+               depends_on=?, test_command=?, local_key=? WHERE id=?"#,
         )
         .bind(&u.title)
         .bind(&u.instruction)
         .bind(u.state.as_str())
+        .bind(u.assignee_role.as_str())
         .bind(u.rework_count as i64)
         .bind(&u.inner_commit_sha)
         .bind(&u.receipt_id)
         .bind(&u.verdict_id)
+        .bind(to_json(&u.depends_on)?)
+        .bind(&u.test_command)
+        .bind(&u.local_key)
         .bind(&u.id)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn latest_active_run(&self, repo_root: &str) -> Result<FactoryRun, WanaxError> {
+        let rows = sqlx::query(
+            "SELECT * FROM factory_runs WHERE repo_root = ? ORDER BY created_at DESC",
+        )
+        .bind(repo_root)
+        .fetch_all(&self.pool)
+        .await?;
+        for row in rows {
+            let run = row_to_run(row)?;
+            if !run.state.is_terminal() {
+                return Ok(run);
+            }
+        }
+        Err(WanaxError::from_code(ErrorCode::Resume))
     }
 
     pub async fn work_units_for_run(&self, run_id: &str) -> Result<Vec<WorkUnit>, WanaxError> {
@@ -390,6 +436,13 @@ fn to_json<T: serde::Serialize>(v: &T) -> Result<String, WanaxError> {
     serde_json::to_string(v).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))
 }
 
+fn optional_json<T: serde::Serialize>(v: &Option<T>) -> Result<Option<String>, WanaxError> {
+    match v {
+        Some(x) => Ok(Some(to_json(x)?)),
+        None => Ok(None),
+    }
+}
+
 fn from_json<T: serde::de::DeserializeOwned>(s: String) -> Result<T, WanaxError> {
     serde_json::from_str(&s).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))
 }
@@ -439,6 +492,19 @@ fn row_to_unit(row: sqlx::sqlite::SqliteRow) -> Result<WorkUnit, WanaxError> {
         assignee_role: AssigneeRole::parse(&role_s)
             .ok_or_else(|| WanaxError::with_detail(ErrorCode::Db, "bad role"))?,
         parent_id: row.try_get("parent_id")?,
+        allowed_globs: row
+            .try_get::<Option<String>, _>("allowed_globs")?
+            .map(from_json)
+            .transpose()?,
+        depends_on: row
+            .try_get::<Option<String>, _>("depends_on")
+            .ok()
+            .flatten()
+            .map(from_json)
+            .transpose()?
+            .unwrap_or_default(),
+        test_command: row.try_get("test_command").ok().flatten(),
+        local_key: row.try_get("local_key").ok().flatten(),
         rework_count: row.try_get::<i64, _>("rework_count")? as u32,
         inner_commit_sha: row.try_get("inner_commit_sha")?,
         receipt_id: row.try_get("receipt_id")?,

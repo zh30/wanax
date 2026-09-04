@@ -243,6 +243,8 @@ pub struct Contract {
     pub test_timeout_secs: u32,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub agent_spec: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +283,13 @@ pub struct WorkUnit {
     pub state: WorkUnitState,
     pub assignee_role: AssigneeRole,
     pub parent_id: Option<String>,
+    pub allowed_globs: Option<Vec<String>>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub test_command: Option<String>,
+    #[serde(default)]
+    pub local_key: Option<String>,
     pub rework_count: u32,
     pub inner_commit_sha: Option<String>,
     pub receipt_id: Option<String>,
@@ -331,6 +340,10 @@ pub fn inner_branch_name(run_id: &str) -> String {
 
 pub fn outer_branch_name(run_id: &str) -> String {
     format!("wanax/{run_id}/outer")
+}
+
+pub fn peer_branch_name(run_id: &str, seq: u32) -> String {
+    format!("wanax/{run_id}/peer-{seq}")
 }
 
 #[cfg(test)]

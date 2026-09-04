@@ -21,9 +21,13 @@ pub struct FileConfig {
     #[serde(default)]
     pub git: GitConfig,
     #[serde(default)]
+    pub github: GitHubConfig,
+    #[serde(default)]
     pub test: TestConfig,
     #[serde(default)]
     pub lock: LockConfig,
+    #[serde(default)]
+    pub verify: VerifyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +170,12 @@ impl Default for GitConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GitHubConfig {
+    #[serde(default)]
+    pub create_pr: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestConfig {
     #[serde(default = "default_test_cmd")]
@@ -190,6 +200,26 @@ impl Default for LockConfig {
     fn default() -> Self {
         Self {
             repo_exclusive: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyConfig {
+    #[serde(default)]
+    pub plugins: Vec<String>,
+    #[serde(default = "default_agent_spec_bin")]
+    pub agent_spec_bin: String,
+    #[serde(default)]
+    pub require_plugins: bool,
+}
+
+impl Default for VerifyConfig {
+    fn default() -> Self {
+        Self {
+            plugins: Vec::new(),
+            agent_spec_bin: default_agent_spec_bin(),
+            require_plugins: false,
         }
     }
 }
@@ -226,6 +256,9 @@ fn default_test_cmd() -> String {
 }
 fn default_true() -> bool {
     true
+}
+fn default_agent_spec_bin() -> String {
+    "agent-spec".into()
 }
 
 #[derive(Debug, Clone)]
@@ -338,6 +371,11 @@ default_command = "cargo test"
 
 [lock]
 repo_exclusive = true
+
+[verify]
+plugins = []
+agent_spec_bin = "agent-spec"
+require_plugins = false
 "#
     .to_string()
 }
@@ -389,8 +427,17 @@ fn overlay(mut base: FileConfig, over: FileConfig) -> FileConfig {
     base.worker = over.worker;
     base.budget = over.budget;
     base.git = over.git;
+    base.github = over.github;
     base.test = over.test;
     base.lock = over.lock;
+    if over.verify.plugins.is_empty()
+        && !over.verify.require_plugins
+        && over.verify.agent_spec_bin == default_agent_spec_bin()
+    {
+        // keep global verify when repo still has the init placeholder
+    } else {
+        base.verify = over.verify;
+    }
     base
 }
 

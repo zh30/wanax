@@ -2,6 +2,7 @@ pub mod accept;
 pub mod budget;
 pub mod config;
 pub mod contract;
+pub mod dag;
 pub mod error;
 pub mod hashutil;
 pub mod ids;

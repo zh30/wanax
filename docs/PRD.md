@@ -952,9 +952,16 @@ v1 不做产品分析埋点。
 
 ### Phase 3
 
-- [ ] 相交文件集的两个 peer 被拒绝
-- [ ] 不相交 peer 结果回收到 inner_branch
-- [ ] PR 创建仅发生在 accept 之后且仅外环持有 token
+- [x] 相交文件集的两个 peer 被拒绝
+- [x] 不相交 peer 结果回收到 inner_branch
+- [x] PR 创建仅发生在 accept 之后且仅外环持有 token
+
+### Phase 4
+
+- [x] `--lang zh` 输出中文 CLI 文案，错误码仍为英文
+- [x] `wanax resume` 从 stale lock 恢复未终态 Run
+- [x] 多 WorkUnit DAG 按依赖序执行
+- [x] 可选 agent-spec `lifecycle` verifier plugin
 
 ---
 

@@ -79,6 +79,28 @@ impl RepoLock {
         Ok(Self { info, file })
     }
 
+    /// Take over a stale LOCK for the same run, or create one if missing.
+    pub fn acquire_for_resume(repo_root: &Path, run_id: &str) -> Result<Self, WanaxError> {
+        let path = Self::lock_path(repo_root);
+        if path.exists() {
+            let existing = read_lock(&path)?;
+            if existing.run_id != run_id {
+                return Err(WanaxError::new(
+                    ErrorCode::RepoLocked,
+                    format!("repo locked by run {}", existing.run_id),
+                ));
+            }
+            if pid_alive(existing.pid) {
+                return Err(WanaxError::new(
+                    ErrorCode::RepoLocked,
+                    format!("repo locked by run {}", existing.run_id),
+                ));
+            }
+            fs::remove_file(&path).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
+        }
+        Self::acquire(repo_root, run_id)
+    }
+
     pub fn release(self) -> Result<(), WanaxError> {
         let path = self.info.lock_path.clone();
         drop(self);

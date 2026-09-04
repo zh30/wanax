@@ -59,7 +59,7 @@ pub fn run(force: bool) -> Result<(), WanaxError> {
         EXAMPLE_CONTRACT,
     )
     .map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
-    println!("initialized .wanax/ and specs/example.contract.md");
-    println!("Next: git add .wanax/config.toml specs/");
+    println!("{}", crate::i18n::t("initialized"));
+    println!("{}", crate::i18n::t("init_next"));
     Ok(())
 }

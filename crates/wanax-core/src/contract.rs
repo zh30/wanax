@@ -18,6 +18,7 @@ struct FrontMatter {
     allowed_globs: Option<Vec<String>>,
     forbidden_globs: Option<Vec<String>>,
     forbidden_rules: Option<Vec<String>>,
+    agent_spec: Option<String>,
 }
 
 const DEFAULT_FORBIDDEN: &[&str] = &["**/.env", "**/.wanax/credentials*"];
@@ -136,6 +137,7 @@ pub fn parse_contract_bytes(raw: &[u8], repo_relative: &str) -> Result<Contract,
         test_command,
         test_timeout_secs: timeout,
         name: fm.name,
+        agent_spec: fm.agent_spec.filter(|s| !s.trim().is_empty()),
     })
 }
 
