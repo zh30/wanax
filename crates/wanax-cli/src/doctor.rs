@@ -10,7 +10,14 @@ use wanax_verify::allowed_globs_cover_binding_tests;
 pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), WanaxError> {
     let cwd = std::env::current_dir().map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
     let git_ok = is_git_repo(&cwd) && which::which("git").is_ok();
-    println!("git: {}", if git_ok { "ok" } else { "missing" });
+    println!(
+        "{}",
+        if git_ok {
+            crate::i18n::t("git_ok")
+        } else {
+            crate::i18n::t("git_missing")
+        }
+    );
 
     let cfg = if cwd.join(".wanax").join("config.toml").is_file() {
         load_merged_config(&cwd, data_dir).ok()
@@ -26,29 +33,35 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         .map(|c| c.file.worker.octoscode_bin.as_str())
         .unwrap_or("octoscode");
     if adapter_name == "fake" {
-        println!("adapter fake: ok");
+        println!("adapter fake: {}", crate::i18n::t("adapter_ok"));
     } else if adapter_name == "cmd" {
         let cmd = cfg
             .as_ref()
             .map(|c| c.file.worker.cmd.as_str())
             .unwrap_or("");
         match wanax_worker::resolve_cmd_bin(cmd) {
-            Ok(_) => println!("adapter {cmd}: ok"),
-            Err(_) => println!("adapter {cmd}: missing"),
+            Ok(_) => println!("adapter {cmd}: {}", crate::i18n::t("adapter_ok")),
+            Err(_) => println!("adapter {cmd}: {}", crate::i18n::t("adapter_missing")),
         }
     } else {
         match which::which(adapter_bin) {
             Ok(_) => {
                 let octo = wanax_worker::OctoscodeAdapter::new(adapter_bin);
                 match octo.has_yolo_flag() {
-                    Ok(true) => println!("adapter {adapter_bin}: ok"),
+                    Ok(true) => println!("adapter {adapter_bin}: {}", crate::i18n::t("adapter_ok")),
                     Ok(false) => println!(
                         "adapter {adapter_bin}: [NEEDS CLARIFICATION] --yolo flag not found"
                     ),
-                    Err(_) => println!("adapter {adapter_bin}: missing"),
+                    Err(_) => println!(
+                        "adapter {adapter_bin}: {}",
+                        crate::i18n::t("adapter_missing")
+                    ),
                 }
             }
-            Err(_) => println!("adapter {adapter_bin}: missing"),
+            Err(_) => println!(
+                "adapter {adapter_bin}: {}",
+                crate::i18n::t("adapter_missing")
+            ),
         }
     }
 
@@ -62,15 +75,23 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         .is_some();
     println!(
         "WANAX_COMMANDER_API_KEY: {}",
-        if cmd_key { "present" } else { "missing" }
+        if cmd_key {
+            crate::i18n::t("key_present")
+        } else {
+            crate::i18n::t("key_missing")
+        }
     );
     println!(
         "WANAX_INNER_API_KEY: {}",
-        if inner_key { "present" } else { "missing" }
+        if inner_key {
+            crate::i18n::t("key_present")
+        } else {
+            crate::i18n::t("key_missing")
+        }
     );
 
     match inspect_lock(&cwd) {
-        Ok(None) => println!("lock: none"),
+            Ok(None) => println!("{}", crate::i18n::t("lock_none")),
         Ok(Some((info, true))) => {
             println!("lock: held run={} pid={}", info.run_id, info.pid);
         }
@@ -106,13 +127,17 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
     })()
     .is_ok();
     println!(
-        "disk: {}",
-        if writable { "writable" } else { "not writable" }
+        "{}",
+        if writable {
+            crate::i18n::t("disk_writable")
+        } else {
+            crate::i18n::t("disk_not_writable")
+        }
     );
 
     let tests_writable = scan_writable_test_contracts(&cwd);
     if tests_writable.is_empty() {
-        println!("contracts: binding tests outside allowed_globs");
+        println!("{}", crate::i18n::t("contracts_ok"));
     } else {
         for rel in &tests_writable {
             println!(
@@ -120,6 +145,29 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
                 ErrorCode::ContractTestsWritable.as_str(),
                 ErrorCode::ContractTestsWritable.default_message()
             );
+        }
+    }
+
+    if let Some(cfg) = &cfg {
+        if cfg
+            .file
+            .verify
+            .plugins
+            .iter()
+            .any(|p| p == "agent-spec" || p == "agent_spec")
+        {
+            let bin = if cfg.file.verify.agent_spec_bin.is_empty() {
+                "agent-spec"
+            } else {
+                cfg.file.verify.agent_spec_bin.as_str()
+            };
+            if which::which(bin).is_ok() || std::path::Path::new(bin).is_file() {
+                println!("{}", crate::i18n::t("plugin_ok"));
+            } else {
+                println!("{}", crate::i18n::t("plugin_missing"));
+            }
+        } else {
+            println!("{}", crate::i18n::t("plugin_off"));
         }
     }
 

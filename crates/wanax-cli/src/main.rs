@@ -1,5 +1,7 @@
 mod doctor;
 mod engine;
+mod gh;
+mod i18n;
 mod init;
 mod logging;
 
@@ -18,6 +20,9 @@ struct Cli {
     /// Directory for wanax.db (default: ~/.wanax)
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
+    /// CLI language: en (default) or zh
+    #[arg(long, global = true)]
+    lang: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -59,6 +64,13 @@ enum Commands {
     Cancel {
         run_id: String,
     },
+    Resume {
+        run_id: Option<String>,
+        #[arg(long)]
+        allow_dirty: bool,
+        #[arg(long)]
+        adapter: Option<AdapterArg>,
+    },
     Doctor {
         #[arg(long)]
         fix_lock: bool,
@@ -83,6 +95,7 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), WanaxError> {
     let cli = Cli::parse();
+    i18n::set_lang(i18n::resolve_lang(cli.lang.as_deref()));
     let data_dir = cli.data_dir.unwrap_or_else(global_data_dir);
     match cli.command {
         Commands::Init { force } => init::run(force),
@@ -101,6 +114,19 @@ async fn run() -> Result<(), WanaxError> {
         }
         Commands::Status { run_id } => status(data_dir, run_id).await,
         Commands::Cancel { run_id } => cancel(data_dir, run_id).await,
+        Commands::Resume {
+            run_id,
+            allow_dirty,
+            adapter,
+        } => {
+            engine::resume(engine::ResumeOpts {
+                run_id,
+                allow_dirty,
+                adapter: adapter.map(Into::into),
+                data_dir,
+            })
+            .await
+        }
         Commands::Doctor { fix_lock, strict } => doctor::run(fix_lock, strict, &data_dir).await,
         Commands::Verdict { run_id } => print_verdict(data_dir, run_id).await,
     }
@@ -117,13 +143,20 @@ async fn status(data_dir: PathBuf, run_id: Option<String>) -> Result<(), WanaxEr
         None => {
             let runs = store.list_runs().await?;
             if runs.is_empty() {
-                println!("No runs.");
+                println!("{}", i18n::t("no_runs"));
                 return Ok(());
             }
-            println!(
-                "{:<32} {:<18} {:<8} {:<10} {:<6} LastEvent",
-                "Run", "State", "Unit", "USD", "Turns"
-            );
+            if i18n::current_lang() == i18n::Lang::Zh {
+                println!(
+                    "{:<32} {:<18} {:<8} {:<10} {:<6} 最近事件",
+                    "运行", "状态", "单元", "美元", "回合"
+                );
+            } else {
+                println!(
+                    "{:<32} {:<18} {:<8} {:<10} {:<6} LastEvent",
+                    "Run", "State", "Unit", "USD", "Turns"
+                );
+            }
             for run in runs {
                 let units = store.work_units_for_run(&run.id).await.unwrap_or_default();
                 let unit = units.last().map(|u| u.id.as_str()).unwrap_or("-");
@@ -203,7 +236,7 @@ async fn print_verdict(data_dir: PathBuf, run_id: String) -> Result<(), WanaxErr
     let _run = store.get_run(&run_id).await?;
     let units = store.work_units_for_run(&run_id).await?;
     let Some(unit) = units.last() else {
-        println!("No verdict.");
+        println!("{}", i18n::t("no_verdict"));
         return Ok(());
     };
     match store.latest_verdict(&unit.id).await? {
@@ -214,7 +247,7 @@ async fn print_verdict(data_dir: PathBuf, run_id: String) -> Result<(), WanaxErr
             println!("boundary_ok={}", v.boundary_ok);
             println!("commander_model={}", v.commander_model);
         }
-        None => println!("No verdict."),
+        None => println!("{}", i18n::t("no_verdict")),
     }
     Ok(())
 }

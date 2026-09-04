@@ -203,6 +203,29 @@ pub fn is_ancestor(repo: &Path, ancestor: &str, descendant: &str) -> Result<bool
     Ok(out.status.success())
 }
 
+pub fn ref_exists(repo: &Path, name: &str) -> bool {
+    run_git(repo, &["rev-parse", "--verify", "--quiet", name])
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn cherry_pick(worktree: &Path, sha: &str) -> Result<(), WanaxError> {
+    let out = run_git(worktree, &["cherry-pick", sha])?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let _ = run_git(worktree, &["cherry-pick", "--abort"]);
+    Err(WanaxError::new(
+        ErrorCode::Db,
+        format!("cherry-pick conflict merging peer commit {sha}"),
+    ))
+}
+
+pub fn checkout_branch(worktree: &Path, branch: &str) -> Result<(), WanaxError> {
+    run_git_ok(worktree, &["checkout", branch])?;
+    Ok(())
+}
+
 /// Install a PATH-prepended git wrapper that denies push and protected-ref checkout.
 pub fn install_git_wrapper(
     worktree: &Path,

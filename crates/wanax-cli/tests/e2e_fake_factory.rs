@@ -1124,6 +1124,412 @@ fn goal_stops_on_no_progress() {
     assert_eq!(reviews_before_outer, 1, "{events:?}");
 }
 
+fn setup_peer_crate(dir: &Path) {
+    fs::write(
+        dir.join("src/lib.rs"),
+        "pub mod a;\npub mod b;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn both() {\n        assert_eq!(super::a::x(), 1);\n        assert_eq!(super::b::y(), 2);\n    }\n}\n",
+    )
+    .unwrap();
+    fs::write(dir.join("src/a.rs"), "pub fn x() -> i32 { unimplemented!() }\n").unwrap();
+    fs::write(dir.join("src/b.rs"), "pub fn y() -> i32 { unimplemented!() }\n").unwrap();
+}
+
+fn peer_dispatch_script(overlap: bool) -> String {
+    if overlap {
+        r#"{
+          "dispatch": {"peers": [
+            {"title": "peer-a", "instruction": "implement a::x in src/a.rs", "allowed_globs": ["src/**"]},
+            {"title": "peer-b", "instruction": "implement b::y in src/b.rs", "allowed_globs": ["src/a/**"]}
+          ]},
+          "verdicts": [{"decision": "accept", "reason": "ok", "files_reviewed": []}]
+        }"#
+        .into()
+    } else {
+        r#"{
+          "dispatch": {"peers": [
+            {"title": "peer-a", "instruction": "implement a::x in src/a.rs", "allowed_globs": ["src/a.rs"]},
+            {"title": "peer-b", "instruction": "implement b::y in src/b.rs", "allowed_globs": ["src/b.rs"]}
+          ]},
+          "verdicts": [{"decision": "accept", "reason": "both modules pass", "files_reviewed": ["src/a.rs", "src/b.rs"]}]
+        }"#
+        .into()
+    }
+}
+
+fn write_peer_fakes(h: &Harness) {
+    fs::write(
+        h.path().join(".wanax/fake-peer-1.toml"),
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/a.rs\"\ncontent = '''pub fn x() -> i32 { 1 }\n'''\n",
+    )
+    .unwrap();
+    fs::write(
+        h.path().join(".wanax/fake-peer-2.toml"),
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/b.rs\"\ncontent = '''pub fn y() -> i32 { 2 }\n'''\n",
+    )
+    .unwrap();
+}
+
+fn write_fake_gh(bin_root: &Path) -> PathBuf {
+    let bin = bin_root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        "#!/bin/sh\necho \"https://github.com/example/wanax/pull/42\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&gh).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&gh, perms).unwrap();
+    }
+    bin
+}
+
+#[test]
+fn peer_overlap_rejected() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    setup_peer_crate(h.path());
+    git(h.path(), &["add", "src"]);
+    git(h.path(), &["commit", "-m", "peer crate"]);
+    h.write_contract(&contract("src/**"));
+    write_peer_fakes(&h);
+    let script = h.data.path().join("peer-overlap.json");
+    fs::write(&script, peer_dispatch_script(true)).unwrap();
+    let out = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_COMMANDER_SCRIPT", &script)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0));
+    assert!(
+        stderr.contains("E_PEER_OVERLAP"),
+        "stderr={stderr} stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
+fn peer_disjoint_recovery_accepted() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    setup_peer_crate(h.path());
+    git(h.path(), &["add", "src"]);
+    git(h.path(), &["commit", "-m", "peer crate"]);
+    h.write_contract(&contract("src/**"));
+    write_peer_fakes(&h);
+    let script = h.data.path().join("peer-ok.json");
+    fs::write(&script, peer_dispatch_script(false)).unwrap();
+    let out = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_COMMANDER_SCRIPT", &script)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("state=accepted"), "{stdout}");
+    let env = h.envelope();
+    let peer_receipts = env["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["actor"] == "peer" && e["kind"] == "receipt_submitted")
+        .count();
+    assert_eq!(peer_receipts, 2);
+}
+
+#[test]
+fn gh_pr_after_accept_outer_only() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let cfg = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&cfg).unwrap();
+    t.push_str("\n[github]\ncreate_pr = true\n");
+    fs::write(&cfg, t).unwrap();
+    let gh_bin = write_fake_gh(h.data.path());
+    let path = std::env::var("PATH").unwrap_or_default();
+    let out = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("PATH", format!("{}:{path}", gh_bin.display()))
+        .env("GH_TOKEN", "test-token-outer-only")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("state=accepted"), "{stdout}");
+    assert!(stdout.contains("pr=https://github.com/example/wanax/pull/42"), "{stdout}");
+    let env = h.envelope();
+    let pr_event = env["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "state_changed" && e["payload"]["github_pr"].is_string());
+    assert!(pr_event);
+}
+
+#[test]
+fn lang_zh_status_empty() {
+    let h = Harness::new();
+    let out = wanax()
+        .args(["--lang", "zh", "status", "--data-dir"])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("没有运行记录。"), "{stdout}");
+    assert!(!stdout.contains("No runs."));
+}
+
+#[test]
+fn resume_rejects_terminal_run() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        0,
+    );
+    let run_id = out
+        .stdout
+        .lines()
+        .next()
+        .expect("run id")
+        .trim()
+        .to_string();
+    let resume = h.run(&["resume", &run_id], 1);
+    assert!(
+        resume.stderr.contains("E_RESUME"),
+        "stderr={}",
+        resume.stderr
+    );
+}
+
+#[test]
+fn resume_after_kill_accepts() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&format!(
+        "turns = 1\nrun_tests = false\nsleep_ms = 60000\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}'''\n"
+    ));
+    let mut child = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut run_id = String::new();
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(100));
+        if h.path().join(".wanax/LOCK").is_file() {
+            if let Ok(rd) = fs::read_dir(h.path().join(".wanax/runs")) {
+                if let Some(e) = rd.filter_map(|x| x.ok()).next() {
+                    run_id = e.file_name().to_string_lossy().into_owned();
+                    break;
+                }
+            }
+        }
+    }
+    assert!(!run_id.is_empty(), "no run started");
+    std::thread::sleep(Duration::from_millis(300));
+    let _ = child.kill();
+    let _ = child.wait();
+    h.write_fake(&fake_toml_good());
+    let out = h.run(&["resume", &run_id, "--adapter", "fake"], 0);
+    assert!(
+        out.stdout.contains("state=accepted"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+}
+
+fn dag_dispatch_script() -> String {
+    r#"{
+      "dispatch": {"units": [
+        {"id": "u1", "title": "add", "instruction": "implement add", "depends_on": [], "test_command": "cargo test test_add -- --exact"},
+        {"id": "u2", "title": "mul", "instruction": "implement mul", "depends_on": ["u1"]}
+      ]},
+      "verdicts": [{"decision": "accept", "reason": "ok", "files_reviewed": ["src/lib.rs"]}]
+    }"#
+    .into()
+}
+
+#[test]
+fn dag_units_run_in_dependency_order() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    fs::write(
+        h.path().join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { unimplemented!() }\npub fn mul(a: i32, b: i32) -> i32 { unimplemented!() }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_add() { assert_eq!(super::add(2, 3), 5); }\n    #[test]\n    fn test_mul() { assert_eq!(super::mul(2, 3), 6); }\n}\n",
+    )
+    .unwrap();
+    git(h.path(), &["add", "src/lib.rs"]);
+    git(h.path(), &["commit", "-m", "dag crate"]);
+    h.write_contract(&contract("src/**"));
+    fs::write(
+        h.path().join(".wanax/fake-unit-1.toml"),
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn mul(a: i32, b: i32) -> i32 { unimplemented!() }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_add() { assert_eq!(super::add(2, 3), 5); }\n    #[test]\n    fn test_mul() { assert_eq!(super::mul(2, 3), 6); }\n}\n'''\n",
+    )
+    .unwrap();
+    fs::write(
+        h.path().join(".wanax/fake-unit-2.toml"),
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn mul(a: i32, b: i32) -> i32 { a * b }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_add() { assert_eq!(super::add(2, 3), 5); }\n    #[test]\n    fn test_mul() { assert_eq!(super::mul(2, 3), 6); }\n}\n'''\n",
+    )
+    .unwrap();
+    let script = h.data.path().join("dag.json");
+    fs::write(&script, dag_dispatch_script()).unwrap();
+    let out = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_COMMANDER_SCRIPT", &script)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={} stdout={stdout}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("state=accepted"), "{stdout}");
+    let env = h.envelope();
+    let dispatched = env["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "unit_dispatched")
+        .count();
+    assert!(dispatched >= 2, "{env}");
+}
+
+#[test]
+fn agent_spec_plugin_runs_on_outer() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let mut body = contract("src/**");
+    body = body.replace(
+        "forbidden_globs:",
+        "agent_spec: \"specs/add.spec.md\"\nforbidden_globs:",
+    );
+    h.write_contract(&body);
+    fs::write(h.path().join("specs/add.spec.md"), "# dummy agent-spec\n").unwrap();
+    git(h.path(), &["add", "specs/add.spec.md"]);
+    git(h.path(), &["commit", "-m", "agent spec"]);
+    h.write_fake(&fake_toml_good());
+    let cfg = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&cfg).unwrap();
+    t = t.replace("plugins = []", "plugins = [\"agent-spec\"]");
+    fs::write(&cfg, t).unwrap();
+    let bin = h.data.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let marker = h.data.path().join("plugin-ran");
+    let plugin = bin.join("agent-spec");
+    fs::write(
+        &plugin,
+        format!(
+            "#!/bin/sh\necho \"$PWD\" > \"{}\"\nexit 0\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&plugin).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&plugin, perms).unwrap();
+    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    let out = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("PATH", format!("{}:{path}", bin.display()))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={} stdout={stdout}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("state=accepted"), "{stdout}");
+    assert!(marker.is_file(), "plugin did not run");
+    let env = h.envelope();
+    let plugin_ev = env["events"].as_array().unwrap().iter().any(|e| {
+        e["kind"] == "state_changed" && e["payload"]["plugin"] == "agent-spec"
+    });
+    assert!(plugin_ev, "{env}");
+}
+
 fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
     fn rec(dir: &Path, name: &str) -> Option<PathBuf> {
         for e in fs::read_dir(dir).ok()?.flatten() {

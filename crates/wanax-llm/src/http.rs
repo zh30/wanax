@@ -1,8 +1,8 @@
 use crate::jsonutil::extract_json_object;
 use crate::provider::{Completion, CompletionClient};
 use crate::{
-    parse_dispatch, parse_verdict, Commander, DispatchContext, LlmUsage, VerdictContext,
-    VerdictDraft, WorkUnitDraft,
+    parse_dispatch_plan, parse_verdict, Commander, DispatchContext, DispatchPlan, LlmUsage,
+    VerdictContext, VerdictDraft,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -43,10 +43,10 @@ impl HttpCommander {
 
 #[async_trait]
 impl Commander for HttpCommander {
-    async fn dispatch_unit(
+    async fn dispatch_plan(
         &self,
         ctx: &DispatchContext,
-    ) -> Result<(WorkUnitDraft, LlmUsage), WanaxError> {
+    ) -> Result<(DispatchPlan, LlmUsage), WanaxError> {
         let user = crate::format_dispatch_instruction(ctx);
         let completion = self
             .client
@@ -54,9 +54,9 @@ impl Commander for HttpCommander {
             .await?;
         let json = extract_json_object(&completion.text)
             .ok_or_else(|| WanaxError::from_code(ErrorCode::CommanderSchema))?;
-        let (draft, _) = parse_dispatch(json)?;
+        let (plan, _) = parse_dispatch_plan(json)?;
         Ok((
-            draft,
+            plan,
             Self::usage_from(&completion, DISPATCH_SYSTEM, &user, json.to_string()),
         ))
     }
@@ -129,10 +129,14 @@ mod tests {
                 test_command: "cargo test".into(),
                 test_timeout_secs: 30,
                 name: Some("add-fn".into()),
+                agent_spec: None,
             },
             rework_notes: None,
         };
-        let (draft, usage) = cmd.dispatch_unit(&ctx).await.unwrap();
+        let (plan, usage) = cmd.dispatch_plan(&ctx).await.unwrap();
+        let DispatchPlan::Single(draft) = plan else {
+            panic!("expected single dispatch");
+        };
         assert_eq!(draft.title, "add-fn");
         assert!(draft.instruction.contains("cargo test"));
         assert_eq!(usage.prompt_tokens, Some(9));

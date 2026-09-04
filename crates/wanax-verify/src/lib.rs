@@ -1,4 +1,9 @@
+pub mod peer;
+pub mod plugin;
+
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+pub use peer::{find_peer_overlap, peer_glob_sets_overlap};
+pub use plugin::{run_verifier_plugins, PluginReport};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

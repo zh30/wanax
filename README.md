@@ -224,12 +224,13 @@ Keep binding tests **outside** `allowed_globs`. If the tests live in `src/lib.rs
 |---|---|
 | `wanax init [--force]` | Create `.wanax/` and an example contract |
 | `wanax start --contract <path> [--adapter octoscode\|fake\|cmd] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
+| `wanax resume [run_id]` | Continue an interrupted non-terminal run (takes over a stale LOCK) |
 | `wanax status [run_id]` | State, spend, current unit, last event |
 | `wanax cancel <run_id>` | SIGTERM the worker, keep the tombstone, release the lock |
 | `wanax verdict <run_id>` | Print the last outer verdict |
 | `wanax doctor [--strict] [--fix-lock]` | Git, adapter, keys (presence only), stale lock, disk |
 
-Global: `--data-dir <path>` (default `~/.wanax`).
+Global: `--data-dir <path>` (default `~/.wanax`), `--lang en|zh` (or `WANAX_LANG`).
 
 ## Outputs
 
@@ -246,16 +247,19 @@ Git artifacts: `wanax/<run_id>/inner` and `wanax/<run_id>/outer`. Inner worktree
 
 ## Current status
 
-Implemented through **Phase 2** of [`docs/PRD.md`](docs/PRD.md):
+Implemented through **Phase 4** of [`docs/PRD.md`](docs/PRD.md):
 
-- One work unit per run, Goal loop (`plan → edit → test → self_review`, max 8)
+- One work unit per run by default; Commander may emit a peer batch or a WorkUnit DAG
+- Goal loop (`plan → edit → test → self_review`, max 8)
 - Outer retest on a fresh worktree, glob boundaries, USD + turn budget
 - HTTP commander (Anthropic Messages or OpenAI-compatible Chat Completions)
 - Cassette fixtures via `WANAX_LLM_FIXTURE_DIR` (CI does not call a paid API)
 - Workers: `octoscode`, `fake`, `cmd` (generic subprocess; instruction via `WANAX_INSTRUCTION`; example wrappers in `scripts/workers/`)
 - Goal stops when a red inner test makes no file progress; expensive commander verdict runs only when FR-014 gates are green
+- Peer worktrees with overlap rejection and cherry-pick recovery; optional `gh pr create` after accept
+- `wanax resume` after a crash / stale lock; `--lang zh`; optional `agent-spec lifecycle` plugin (`[verify] plugins = ["agent-spec"]`)
 
-Not in v1 yet: peer worktrees, GitHub PRs, crash resume, multi-unit DAGs, Claude/Codex adapters, `--lang zh`.
+Dedicated Claude/Codex adapters are still wrappers via `cmd`, not first-class binaries.
 
 ## Development
 

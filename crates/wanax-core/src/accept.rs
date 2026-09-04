@@ -11,6 +11,7 @@ pub struct AcceptGates {
     pub changed_files_nonempty: bool,
     pub budget_exhausted: bool,
     pub rework_count: u32,
+    pub plugin_ok: bool,
 }
 
 impl AcceptGates {
@@ -32,7 +33,13 @@ impl AcceptGates {
             changed_files_nonempty: !receipt.changed_files.is_empty(),
             budget_exhausted,
             rework_count,
+            plugin_ok: true,
         }
+    }
+
+    pub fn with_plugin(mut self, ok: bool) -> Self {
+        self.plugin_ok = ok;
+        self
     }
 
     pub fn can_accept(&self) -> bool {
@@ -43,6 +50,7 @@ impl AcceptGates {
             && self.changed_files_nonempty
             && !self.budget_exhausted
             && self.rework_count <= MAX_REWORK
+            && self.plugin_ok
     }
 }
 
@@ -70,6 +78,9 @@ pub fn enforce_decision(
             || !gates.inner_is_descendant
         {
             decision = VerdictDecision::Reject;
+        } else if !gates.plugin_ok {
+            decision = VerdictDecision::Rework;
+            note = Some(ErrorCode::Plugin);
         } else if gates.rework_count > MAX_REWORK {
             decision = VerdictDecision::Escalate;
             note = Some(ErrorCode::ReworkLimit);

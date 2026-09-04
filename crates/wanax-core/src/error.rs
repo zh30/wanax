@@ -27,6 +27,9 @@ pub enum ErrorCode {
     PeerOverlap,
     LockStale,
     ProtectedRef,
+    Resume,
+    DagCycle,
+    Plugin,
 }
 
 impl ErrorCode {
@@ -56,6 +59,9 @@ impl ErrorCode {
             Self::PeerOverlap => "E_PEER_OVERLAP",
             Self::LockStale => "E_LOCK_STALE",
             Self::ProtectedRef => "E_PROTECTED_REF",
+            Self::Resume => "E_RESUME",
+            Self::DagCycle => "E_DAG_CYCLE",
+            Self::Plugin => "E_PLUGIN",
         }
     }
 
@@ -101,6 +107,9 @@ impl ErrorCode {
             Self::PeerOverlap => "peer file sets overlap",
             Self::LockStale => "stale lock",
             Self::ProtectedRef => "protected ref",
+            Self::Resume => "cannot resume run",
+            Self::DagCycle => "work unit DAG has a cycle",
+            Self::Plugin => "verifier plugin failed",
         }
     }
 }
@@ -188,6 +197,9 @@ mod tests {
             ErrorCode::PeerOverlap,
             ErrorCode::LockStale,
             ErrorCode::ProtectedRef,
+            ErrorCode::Resume,
+            ErrorCode::DagCycle,
+            ErrorCode::Plugin,
         ];
         let mut seen = HashSet::new();
         for c in codes {

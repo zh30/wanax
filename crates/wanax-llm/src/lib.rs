@@ -27,6 +27,33 @@ pub struct WorkUnitDraft {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerUnitDraft {
+    pub title: String,
+    pub instruction: String,
+    pub allowed_globs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DagUnitDraft {
+    pub id: String,
+    pub title: String,
+    pub instruction: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub allowed_globs: Option<Vec<String>>,
+    #[serde(default)]
+    pub test_command: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum DispatchPlan {
+    Single(WorkUnitDraft),
+    Peers(Vec<PeerUnitDraft>),
+    Dag(Vec<DagUnitDraft>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerdictDraft {
     pub decision: VerdictDecision,
     pub reason: String,
@@ -93,10 +120,10 @@ pub fn pick_commander(cfg: &ResolvedConfig) -> Result<Box<dyn Commander>, WanaxE
 
 #[async_trait]
 pub trait Commander: Send + Sync {
-    async fn dispatch_unit(
+    async fn dispatch_plan(
         &self,
         ctx: &DispatchContext,
-    ) -> Result<(WorkUnitDraft, LlmUsage), WanaxError>;
+    ) -> Result<(DispatchPlan, LlmUsage), WanaxError>;
     async fn verdict(&self, ctx: &VerdictContext) -> Result<(VerdictDraft, LlmUsage), WanaxError>;
 }
 
@@ -143,10 +170,10 @@ pub fn format_dispatch_instruction(ctx: &DispatchContext) -> String {
 
 #[async_trait]
 impl Commander for MechanicalCommander {
-    async fn dispatch_unit(
+    async fn dispatch_plan(
         &self,
         ctx: &DispatchContext,
-    ) -> Result<(WorkUnitDraft, LlmUsage), WanaxError> {
+    ) -> Result<(DispatchPlan, LlmUsage), WanaxError> {
         let title = ctx
             .contract
             .name
@@ -162,7 +189,7 @@ impl Commander for MechanicalCommander {
             completion_tokens: None,
             raw_json: raw,
         };
-        Ok((draft, usage))
+        Ok((DispatchPlan::Single(draft), usage))
     }
 
     async fn verdict(&self, ctx: &VerdictContext) -> Result<(VerdictDraft, LlmUsage), WanaxError> {
@@ -232,16 +259,16 @@ impl ScriptedCommander {
 
 #[async_trait]
 impl Commander for ScriptedCommander {
-    async fn dispatch_unit(
+    async fn dispatch_plan(
         &self,
         _ctx: &DispatchContext,
-    ) -> Result<(WorkUnitDraft, LlmUsage), WanaxError> {
+    ) -> Result<(DispatchPlan, LlmUsage), WanaxError> {
         let raw = self
             .dispatch_raw
             .first()
             .cloned()
             .unwrap_or_else(|| "{}".into());
-        parse_dispatch(&raw)
+        parse_dispatch_plan(&raw)
     }
 
     async fn verdict(&self, ctx: &VerdictContext) -> Result<(VerdictDraft, LlmUsage), WanaxError> {
@@ -257,6 +284,70 @@ impl Commander for ScriptedCommander {
 }
 
 pub fn parse_dispatch(raw: &str) -> Result<(WorkUnitDraft, LlmUsage), WanaxError> {
+    match parse_dispatch_plan(raw)? {
+        (DispatchPlan::Single(draft), usage) => Ok((draft, usage)),
+        (DispatchPlan::Peers(_) | DispatchPlan::Dag(_), _) => {
+            Err(WanaxError::from_code(ErrorCode::CommanderSchema))
+        }
+    }
+}
+
+pub fn parse_dispatch_plan(raw: &str) -> Result<(DispatchPlan, LlmUsage), WanaxError> {
+    let v: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|_| WanaxError::from_code(ErrorCode::CommanderSchema))?;
+    let usage = LlmUsage {
+        chars_in: 0,
+        chars_out: raw.len() as u64,
+        prompt_tokens: None,
+        completion_tokens: None,
+        raw_json: raw.to_string(),
+    };
+    if let Some(units) = v.get("units").and_then(|p| p.as_array()) {
+        if units.is_empty() || units.len() > 16 {
+            return Err(WanaxError::from_code(ErrorCode::CommanderSchema));
+        }
+        let mut out = Vec::with_capacity(units.len());
+        for u in units {
+            let draft: DagUnitDraft = serde_json::from_value(u.clone())
+                .map_err(|_| WanaxError::from_code(ErrorCode::CommanderSchema))?;
+            if draft.id.is_empty()
+                || draft.id.len() > 64
+                || draft.title.is_empty()
+                || draft.title.len() > 120
+                || draft.instruction.is_empty()
+                || draft.instruction.len() > 8000
+            {
+                return Err(WanaxError::from_code(ErrorCode::CommanderSchema));
+            }
+            out.push(draft);
+        }
+        let nodes: Vec<(String, Vec<String>)> = out
+            .iter()
+            .map(|d| (d.id.clone(), d.depends_on.clone()))
+            .collect();
+        wanax_core::dag::topo_sort(&nodes)?;
+        return Ok((DispatchPlan::Dag(out), usage));
+    }
+    if let Some(peers) = v.get("peers").and_then(|p| p.as_array()) {
+        if peers.is_empty() || peers.len() > 8 {
+            return Err(WanaxError::from_code(ErrorCode::CommanderSchema));
+        }
+        let mut out = Vec::with_capacity(peers.len());
+        for p in peers {
+            let draft: PeerUnitDraft = serde_json::from_value(p.clone())
+                .map_err(|_| WanaxError::from_code(ErrorCode::CommanderSchema))?;
+            if draft.title.is_empty()
+                || draft.title.len() > 120
+                || draft.instruction.is_empty()
+                || draft.instruction.len() > 8000
+                || draft.allowed_globs.is_empty()
+            {
+                return Err(WanaxError::from_code(ErrorCode::CommanderSchema));
+            }
+            out.push(draft);
+        }
+        return Ok((DispatchPlan::Peers(out), usage));
+    }
     let draft: WorkUnitDraft =
         serde_json::from_str(raw).map_err(|_| WanaxError::from_code(ErrorCode::CommanderSchema))?;
     if draft.title.is_empty() || draft.title.len() > 120 || draft.instruction.is_empty() {
@@ -265,16 +356,7 @@ pub fn parse_dispatch(raw: &str) -> Result<(WorkUnitDraft, LlmUsage), WanaxError
     if draft.instruction.len() > 8000 {
         return Err(WanaxError::from_code(ErrorCode::CommanderSchema));
     }
-    Ok((
-        draft,
-        LlmUsage {
-            chars_in: 0,
-            chars_out: raw.len() as u64,
-            prompt_tokens: None,
-            completion_tokens: None,
-            raw_json: raw.to_string(),
-        },
-    ))
+    Ok((DispatchPlan::Single(draft), usage))
 }
 
 pub fn parse_verdict(raw: &str) -> Result<(VerdictDraft, LlmUsage), WanaxError> {
@@ -298,16 +380,26 @@ pub fn parse_verdict(raw: &str) -> Result<(VerdictDraft, LlmUsage), WanaxError> 
 pub async fn dispatch_with_retry(
     commander: &dyn Commander,
     ctx: &DispatchContext,
-) -> Result<(WorkUnitDraft, LlmUsage), WanaxError> {
+) -> Result<(DispatchPlan, LlmUsage), WanaxError> {
     let mut last = WanaxError::from_code(ErrorCode::CommanderSchema);
     for _ in 0..3 {
-        match commander.dispatch_unit(ctx).await {
+        match commander.dispatch_plan(ctx).await {
             Ok(v) => {
-                if v.0.title.is_empty() || v.0.instruction.is_empty() {
-                    last = WanaxError::from_code(ErrorCode::CommanderSchema);
-                    continue;
+                match &v.0 {
+                    DispatchPlan::Single(d) if d.title.is_empty() || d.instruction.is_empty() => {
+                        last = WanaxError::from_code(ErrorCode::CommanderSchema);
+                        continue;
+                    }
+                    DispatchPlan::Peers(peers) if peers.is_empty() => {
+                        last = WanaxError::from_code(ErrorCode::CommanderSchema);
+                        continue;
+                    }
+                    DispatchPlan::Dag(units) if units.is_empty() => {
+                        last = WanaxError::from_code(ErrorCode::CommanderSchema);
+                        continue;
+                    }
+                    _ => return Ok(v),
                 }
-                return Ok(v);
             }
             Err(e) if e.code == ErrorCode::CommanderSchema => last = e,
             Err(e) => return Err(e),
@@ -336,6 +428,10 @@ pub fn work_unit_from_draft(run_id: &str, seq: u32, draft: WorkUnitDraft) -> Wor
         state: wanax_core::WorkUnitState::Queued,
         assignee_role: wanax_core::AssigneeRole::Goal,
         parent_id: None,
+        allowed_globs: None,
+        depends_on: Vec::new(),
+        test_command: None,
+        local_key: None,
         rework_count: 0,
         inner_commit_sha: None,
         receipt_id: None,
