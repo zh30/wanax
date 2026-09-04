@@ -85,6 +85,14 @@ pub struct WorkerConfig {
     pub cmd: String,
     #[serde(default)]
     pub cmd_args: Vec<String>,
+    #[serde(default = "default_claude_bin")]
+    pub claude_bin: String,
+    #[serde(default)]
+    pub claude_args: Vec<String>,
+    #[serde(default = "default_codex_bin")]
+    pub codex_bin: String,
+    #[serde(default)]
+    pub codex_args: Vec<String>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u32,
 }
@@ -96,6 +104,10 @@ impl Default for WorkerConfig {
             octoscode_bin: default_octoscode_bin(),
             cmd: String::new(),
             cmd_args: Vec::new(),
+            claude_bin: default_claude_bin(),
+            claude_args: Vec::new(),
+            codex_bin: default_codex_bin(),
+            codex_args: Vec::new(),
             timeout_secs: default_timeout(),
         }
     }
@@ -239,6 +251,12 @@ fn default_adapter() -> String {
 fn default_octoscode_bin() -> String {
     "octoscode".into()
 }
+fn default_claude_bin() -> String {
+    "claude".into()
+}
+fn default_codex_bin() -> String {
+    "codex".into()
+}
 fn default_timeout() -> u32 {
     DEFAULT_WORKER_TIMEOUT_SECS
 }
@@ -349,6 +367,8 @@ model = "inner"
 [worker]
 adapter = "octoscode"
 octoscode_bin = "octoscode"
+claude_bin = "claude"
+codex_bin = "codex"
 timeout_secs = 1800
 
 [budget]
@@ -394,8 +414,6 @@ pub fn load_merged_config(
         let repo_cfg = load_file(&repo)?;
         merged = overlay(merged, repo_cfg);
     }
-    // Phase 1: lock must stay exclusive.
-    merged.lock.repo_exclusive = true;
     ResolvedConfig::from_file(merged)
 }
 
@@ -527,5 +545,31 @@ mod tests {
             Some("https://repo.test/v1")
         );
         assert_eq!(merged.inner.model, "repo-inner");
+    }
+
+    #[test]
+    fn overlay_keeps_repo_exclusive_false() {
+        let mut repo = FileConfig::default();
+        repo.lock.repo_exclusive = false;
+        let merged = overlay(FileConfig::default(), repo);
+        assert!(!merged.lock.repo_exclusive);
+    }
+
+    #[test]
+    fn load_merged_respects_path_set_lock() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let global = tmp.path().join("global");
+        std::fs::create_dir_all(repo.join(".wanax")).unwrap();
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(
+            repo.join(".wanax").join("config.toml"),
+            default_config_toml().replace("repo_exclusive = true", "repo_exclusive = false"),
+        )
+        .unwrap();
+        let resolved = load_merged_config(&repo, &global).unwrap();
+        assert!(!resolved.file.lock.repo_exclusive);
+        assert_eq!(resolved.file.worker.claude_bin, "claude");
+        assert_eq!(resolved.file.worker.codex_bin, "codex");
     }
 }

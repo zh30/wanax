@@ -339,20 +339,33 @@ impl Store {
         Ok(())
     }
 
-    pub async fn latest_active_run(&self, repo_root: &str) -> Result<FactoryRun, WanaxError> {
+    pub async fn active_runs_for_repo(&self, repo_root: &str) -> Result<Vec<FactoryRun>, WanaxError> {
         let rows = sqlx::query(
             "SELECT * FROM factory_runs WHERE repo_root = ? ORDER BY created_at DESC",
         )
         .bind(repo_root)
         .fetch_all(&self.pool)
         .await?;
+        let mut out = Vec::new();
         for row in rows {
             let run = row_to_run(row)?;
             if !run.state.is_terminal() {
-                return Ok(run);
+                out.push(run);
             }
         }
-        Err(WanaxError::from_code(ErrorCode::Resume))
+        Ok(out)
+    }
+
+    pub async fn latest_active_run(&self, repo_root: &str) -> Result<FactoryRun, WanaxError> {
+        let mut active = self.active_runs_for_repo(repo_root).await?;
+        match active.len() {
+            0 => Err(WanaxError::from_code(ErrorCode::Resume)),
+            1 => Ok(active.remove(0)),
+            n => Err(WanaxError::with_detail(
+                ErrorCode::Resume,
+                format!("{n} active runs; pass run_id"),
+            )),
+        }
     }
 
     pub async fn work_units_for_run(&self, run_id: &str) -> Result<Vec<WorkUnit>, WanaxError> {

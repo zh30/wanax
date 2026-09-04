@@ -182,8 +182,11 @@ impl WorkerAdapterKind {
         })
     }
 
-    pub fn is_phase1(self) -> bool {
-        matches!(self, Self::Octoscode | Self::Fake | Self::Cmd)
+    pub fn is_supported(self) -> bool {
+        matches!(
+            self,
+            Self::Octoscode | Self::Fake | Self::Cmd | Self::Claude | Self::Codex
+        )
     }
 }
 

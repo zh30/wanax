@@ -3,7 +3,7 @@ use wanax_core::config::default_config_toml;
 use wanax_core::error::{ErrorCode, WanaxError};
 use wanax_git::is_git_repo;
 
-const GITIGNORE: &str = "worktrees/\nLOCK\n*.db\ncredentials*\n";
+const GITIGNORE: &str = "worktrees/\nLOCK\nLOCKSET\nlocks/\n*.db\ncredentials*\n";
 
 const EXAMPLE_CONTRACT: &str = r#"---
 spec: wanax.contract
