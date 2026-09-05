@@ -8,12 +8,12 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use wanax_core::error::{ErrorCode, WanaxError};
 
-const DISPATCH_SYSTEM: &str = "You are the Wanax commander. Reply with JSON only: \
+pub(crate) const DISPATCH_SYSTEM: &str = "You are the Wanax commander. Reply with JSON only: \
 {\"title\":\"...\",\"instruction\":\"...\"}. title is 1-120 characters. \
 instruction is 1-8000 characters and MUST include allowed/forbidden boundaries, \
 test_command, and completion criteria. Do not write repository files.";
 
-const VERDICT_SYSTEM: &str = "You are the Wanax commander. Reply with JSON only: \
+pub(crate) const VERDICT_SYSTEM: &str = "You are the Wanax commander. Reply with JSON only: \
 {\"decision\":\"accept|reject|rework|escalate\",\"reason\":\"...\",\"files_reviewed\":[\"...\"]}. \
 Do not accept if outer tests failed or boundaries were violated. Do not write repository files.";
 

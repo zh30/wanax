@@ -1,3 +1,4 @@
+mod cli;
 mod goal;
 mod http;
 mod jsonutil;
@@ -10,6 +11,7 @@ use wanax_core::config::ResolvedConfig;
 use wanax_core::error::{ErrorCode, WanaxError};
 use wanax_core::types::{Contract, Receipt, VerdictDecision, WorkUnit};
 
+pub use cli::CliCommander;
 pub use goal::{
     mechanical_self_review, pick_review_client, run_self_review, self_review_degraded,
     GoalSelfReview,
@@ -107,6 +109,9 @@ pub fn pick_commander(cfg: &ResolvedConfig) -> Result<Box<dyn Commander>, WanaxE
     if let Ok(dir) = std::env::var("WANAX_LLM_FIXTURE_DIR") {
         let client = FixtureClient::load_dir(std::path::Path::new(&dir))?;
         return Ok(Box::new(HttpCommander::new(Arc::new(client), model)));
+    }
+    if wanax_core::commander_is_cli(&cfg.file.commander.provider) {
+        return Ok(Box::new(CliCommander::from_config(cfg)?));
     }
     if let Ok(key) = std::env::var("WANAX_COMMANDER_API_KEY") {
         if !key.is_empty() {

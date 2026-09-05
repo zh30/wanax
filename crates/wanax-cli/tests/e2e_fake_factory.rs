@@ -815,6 +815,38 @@ fn doctor_strict_missing_key() {
 }
 
 #[test]
+fn doctor_strict_cli_commander_skips_api_key() {
+    let h = Harness::new();
+    let script = install_cmd_script(h.data.path(), "claude-commander", "#!/bin/sh\nexit 0\n");
+    let cfg = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&cfg).unwrap();
+    t = t.replacen(
+        "[commander]\nprovider = \"openai_compat\"\nmodel = \"commander\"",
+        &format!(
+            "[commander]\nprovider = \"claude_cli\"\nmodel = \"commander\"\ncli_bin = \"{}\"",
+            script.display()
+        ),
+        1,
+    );
+    fs::write(&cfg, t).unwrap();
+    let out = wanax()
+        .args(["doctor", "--strict", "--data-dir"])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env_remove("WANAX_COMMANDER_API_KEY")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout={stdout} stderr={stderr}"
+    );
+    assert!(!stderr.contains("E_MISSING_API_KEY"), "{stderr}");
+}
+
+#[test]
 fn no_web_tui_telemetry_in_sources() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut hits = Vec::new();
@@ -1507,12 +1539,14 @@ fn agent_spec_plugin_runs_on_outer() {
     let bin = h.data.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
     let marker = h.data.path().join("plugin-ran");
+    let cmds = h.data.path().join("plugin-cmds");
     let plugin = bin.join("agent-spec");
     fs::write(
         &plugin,
         format!(
-            "#!/bin/sh\necho \"$PWD\" > \"{}\"\nexit 0\n",
-            marker.display()
+            "#!/bin/sh\necho \"$PWD\" > \"{}\"\necho \"$1\" >> \"{}\"\nexit 0\n",
+            marker.display(),
+            cmds.display()
         ),
     )
     .unwrap();
@@ -1547,6 +1581,10 @@ fn agent_spec_plugin_runs_on_outer() {
     );
     assert!(stdout.contains("state=accepted"), "{stdout}");
     assert!(marker.is_file(), "plugin did not run");
+    let ran = fs::read_to_string(&cmds).unwrap();
+    assert!(ran.contains("lint"), "{ran}");
+    assert!(ran.contains("verify"), "{ran}");
+    assert!(ran.contains("lifecycle"), "{ran}");
     let env = h.envelope();
     let plugin_ev = env["events"].as_array().unwrap().iter().any(|e| {
         e["kind"] == "state_changed" && e["payload"]["plugin"] == "agent-spec"
@@ -1632,6 +1670,49 @@ fn claude_adapter_accepts() {
             "specs/add.contract.md",
             "--adapter",
             "claude",
+        ],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+}
+
+#[test]
+fn commander_cli_accepts() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let script = install_cmd_script(
+        h.data.path(),
+        "claude-commander",
+        r#"#!/bin/sh
+set -eu
+body=$(cat)
+if printf '%s' "$body" | grep -q '"decision"\|outer_test_exit_code'; then
+  printf '%s' '{"decision":"accept","reason":"ok","files_reviewed":["src/lib.rs"]}'
+else
+  printf '%s' '{"title":"add-fn","instruction":"Implement add. allowed: src/**. test_command: cargo test. CC-01: pass"}'
+fi
+"#,
+    );
+    let cfg = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&cfg).unwrap();
+    t = t.replacen(
+        "[commander]\nprovider = \"openai_compat\"\nmodel = \"commander\"",
+        &format!(
+            "[commander]\nprovider = \"claude_cli\"\nmodel = \"commander\"\ncli_bin = \"{}\"",
+            script.display()
+        ),
+        1,
+    );
+    fs::write(&cfg, t).unwrap();
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
         ],
         0,
     );

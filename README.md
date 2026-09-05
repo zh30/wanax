@@ -47,9 +47,9 @@ Accept requires all of: outer `test_command` exit 0, files inside `allowed_globs
 ## Requirements
 
 - Linux or macOS (Windows is not a v1 target)
-- [Rust](https://rustup.rs/) 1.85+
+- [Rust](https://rustup.rs/) 1.85+ (`rust-toolchain.toml` pins 1.97.1 for CI)
 - Git
-- A commander API key (OpenAI-compatible or Anthropic)
+- A commander: HTTP API key (OpenAI-compatible or Anthropic), **or** `commander.provider = claude_cli|codex_cli` with that CLI on `PATH`
 - A worker CLI with a non-interactive flag (`octoscode --yolo`), **or** `--adapter fake` for tests
 
 ## Install
@@ -71,7 +71,7 @@ cargo run -p wanax-cli -- --help
 One-time machine setup:
 
 ```bash
-export WANAX_COMMANDER_API_KEY='…'   # required for a live commander
+export WANAX_COMMANDER_API_KEY='…'   # HTTP commander only; skip when using claude_cli / codex_cli
 export WANAX_INNER_API_KEY='…'       # only if you set a distinct reviewer.model
 ```
 
@@ -144,9 +144,11 @@ You write the contract every time. You do not retune the factory every time.
 
 ```toml
 [commander]
-provider = "openai_compat"   # openai | openai_compat | anthropic
+provider = "openai_compat"   # openai | openai_compat | anthropic | claude_cli | codex_cli
 model = "gpt-4.1"
 base_url = "https://api.openai.com/v1"
+# cli_bin = "claude"         # when provider is claude_cli / codex_cli
+# cli_args = []
 
 [inner]
 provider = "openai_compat"
@@ -176,7 +178,7 @@ Keys come only from the environment. They are never written to git or to the tom
 
 | Variable | Used for |
 |---|---|
-| `WANAX_COMMANDER_API_KEY` | Outer dispatch and verdict |
+| `WANAX_COMMANDER_API_KEY` | Outer HTTP dispatch and verdict (not used for `claude_cli` / `codex_cli`) |
 | `WANAX_INNER_API_KEY` | Semantic self-review when `reviewer.model` ≠ `inner.model` |
 | `WANAX_DATA_DIR` | SQLite home (default `~/.wanax`) |
 
@@ -204,7 +206,7 @@ export WANAX_COMMANDER_API_KEY="$OPENROUTER_API_KEY"
 
 `wanax init` writes placeholder `model = "commander"` / `model = "inner"` into the **repo** file. Those init placeholders do not replace a real commander/inner block in `~/.wanax/config.toml`. Set models once globally, then `export WANAX_COMMANDER_API_KEY`.
 
-Without a commander key or a fixture, start falls back to a mechanical commander (useful for CI). Live keys are required for a real outer model.
+Without a commander key, a CLI commander, or a fixture, start falls back to a mechanical commander (useful for CI). Live keys are required for a real HTTP outer model.
 
 ### Real `cmd` workers
 
@@ -253,7 +255,7 @@ Git artifacts: `wanax/<run_id>/inner` and `wanax/<run_id>/outer`. Inner worktree
 
 ## Current status
 
-Implemented through **Phase 5** of [`docs/PRD.md`](docs/PRD.md):
+Implemented through **v1 / Phase 6** of [`docs/PRD.md`](docs/PRD.md):
 
 - One work unit per run by default; Commander may emit a peer batch or a WorkUnit DAG
 - Goal loop (`plan → edit → test → self_review`, max 8)
@@ -265,7 +267,8 @@ Implemented through **Phase 5** of [`docs/PRD.md`](docs/PRD.md):
 - Peer worktrees with overlap rejection and cherry-pick recovery; optional `gh pr create` after accept
 - `wanax resume` after a crash / stale lock; `--lang zh`; optional `agent-spec lifecycle` plugin (`[verify] plugins = ["agent-spec"]`)
 - Opt-in path-set multi-run (`[lock] repo_exclusive = false`); `wanax cost` local spend board
-- CI: Ubuntu 24.04 + macOS, `cargo build --locked`
+- CI: Ubuntu 24.04 + macOS, rustc 1.97.1, `cargo build --locked`
+- Commander may be HTTP or a local CLI (`claude_cli` / `codex_cli`); agent-spec plugin runs `lint` + `verify` + `lifecycle`
 
 ## Development
 

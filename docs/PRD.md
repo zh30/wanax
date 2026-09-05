@@ -8,9 +8,9 @@
 | Crate / CLI | `wanax` |
 | Brand token | `wanax`（5 字母；crates.io / npm 精确包名均未占用，检索日 2026-08-30） |
 | Former working names | NightForge、antqueen、Ant Queen（均已废弃，禁止出现在代码、路径、环境变量） |
-| Version | 0.2.0 |
-| Date | 2026-09-04 |
-| Status | Phase 1–5 implemented |
+| Version | 1.0.0 |
+| Date | 2026-09-05 |
+| Status | Implemented — v1 complete |
 | Author | Henry Zhang / Grok Team |
 | Audience | AI Coding Agent + Human implementer |
 | Language | 说明中文；标识符、schema、CLI、FR 编号一律英文 |
@@ -167,12 +167,11 @@ v1 用户不是大众消费者。是已经在用 coding agent 的独立开发者
 ### Future Considerations
 
 - GitHub Issue 为需求源（Orbi 模式；开放问题默认不做，属另一条产品线）
-- `agent-spec` L1–L3 全级验证（Phase 4 已做可选 `lifecycle`）
-- Commander 进程可插拔：Claude Code / Codex / Fable 5 作为外环（不是 Worker）
 - 模型路由策略学习
 - Slack/Telegram 控制面
 
 Phase 5 已落地：一等 Claude/Codex WorkerAdapter、opt-in path-set 多 Run、本地 `wanax cost`、Ubuntu+macOS CI。
+Phase 6 / v1：可插拔 Commander CLI（`claude_cli` / `codex_cli`）、agent-spec `lint`+`verify`+`lifecycle`（L1–L3）、锁定 rustc 1.97.1 的 CI。
 
 ---
 
@@ -378,7 +377,7 @@ draft → contract_ready → dispatched → inner_working → receipt_ready
 
 | Field | Type | Required | Validation | Default | Notes |
 |---|---|---|---|---|---|
-| commander.provider | string | yes | `anthropic` `openai` `openai_compat` | — | [NEEDS CLARIFICATION] 用户密钥源 |
+| commander.provider | string | yes | `anthropic` `openai` `openai_compat` `claude_cli` `codex_cli` | — | CLI 路径不需要 API key |
 | commander.model | string | yes | 非空 | — | |
 | inner.provider | string | yes | 同上 | — | |
 | inner.model | string | yes | 非空 | — | |
@@ -570,7 +569,7 @@ Phase 1 硬限制：不拆多 WorkUnit。多单元是 Phase 2。
 - 默认费率写在 config，不写死在代码常量以外的 fallback：
   - commander: $10 / 1M in, $50 / 1M out（可配）
   - inner: $0.30 / 1M in, $1.20 / 1M out（可配）
-- [NEEDS CLARIFICATION] 真实供应商价表以用户配置为准
+- 真实供应商价表不内置；只读用户配置的 `estimate_rates`
 
 ### FR-016 cancel
 
@@ -592,7 +591,8 @@ Phase 1 硬限制：不拆多 WorkUnit。多单元是 Phase 2。
 
 - Priority: P0
 - 检查：git、adapter bin 存在、API key 环境变量存在（不打印 key）、锁是否陈旧、disk 可写
-- 缺 key → 警告但不 exit 0 以外；`--strict` 时缺 key exit 8
+- 缺 key → 警告但不 exit 0 以外；`--strict` 时 HTTP commander 缺 key exit 8
+- `commander.provider` 为 `claude_cli` / `codex_cli` 时不要求 `WANAX_COMMANDER_API_KEY`
 
 ### FR-019 内环无推送权（安全测试必须覆盖）
 
@@ -638,7 +638,7 @@ Phase 1 硬限制：不拆多 WorkUnit。多单元是 Phase 2。
 - Priority: P2
 - 仅外环在 accept 后调用 `gh pr create`
 - token 只给外环进程，不给 worker 子进程
-- [NEEDS CLARIFICATION] 是否默认开启
+- 默认关闭；`github.create_pr = true` 或环境变量 `WANAX_CREATE_PR=1` 才在 accept 后开 PR
 
 ### FR-025 日志与隐私
 
@@ -680,6 +680,30 @@ Phase 1 硬限制：不拆多 WorkUnit。多单元是 Phase 2。
 - Priority: P1
 - GitHub Actions：Ubuntu 24.04 + macOS（aarch64）
 - `cargo build --locked`、`cargo test --workspace`、`clippy -D warnings`
+
+### FR-030 可插拔 Commander CLI（Phase 6）
+
+- Priority: P2
+- `commander.provider` 增加 `claude_cli` / `codex_cli`
+- 外环只通过 stdin 要 JSON（dispatch / verdict），禁止写业务代码
+- CLI 进程 cwd 是隔离 scratch（带空 `.git`），不是目标仓库
+- 不要求 `WANAX_COMMANDER_API_KEY`；二进制缺失 → `E_ADAPTER_MISSING`
+- Claude 默认 `-p --dangerously-skip-permissions`；Codex 默认 `exec --sandbox read-only -`
+- `cli_bin` / `cli_args` 可覆盖
+
+### FR-031 agent-spec L1–L3（Phase 6）
+
+- Priority: P2
+- 启用 `[verify] plugins = ["agent-spec"]` 时默认依次：`lint`、`verify`、`lifecycle`
+- `verify` 对应机械 L1–L3（结构 / 边界 / 绑定测试）；不发明 `l1`/`l2`/`l3` 子命令
+- `agent_spec_commands` 可改序或裁剪
+- 仍无 crate 依赖
+
+### FR-032 可重复工具链（Phase 6）
+
+- Priority: P1
+- `rust-toolchain.toml` 钉 `1.97.1` + clippy
+- CI 使用同一 toolchain，不再跟 `stable` 漂移
 
 ---
 
@@ -779,7 +803,7 @@ v1 无 GUI。组件是 CLI 与文件。
 | E_REPO_LOCKED | LOCK 存在且 pid 活着 | exit 6 | `repo locked by run <id>` |
 | E_RUN_NOT_FOUND | status/cancel 未知 id | exit 7 | `run not found` |
 | E_ADAPTER_MISSING | octoscode 不在 PATH | start exit 8 | `adapter binary not found: octoscode` |
-| E_MISSING_API_KEY | `--strict` 且无 key | exit 8 | `missing WANAX_COMMANDER_API_KEY` |
+| E_MISSING_API_KEY | `--strict` 且 HTTP commander 无 key | exit 8 | `missing WANAX_COMMANDER_API_KEY` |
 | E_DB | sqlite 损坏 | exit 9 | `database error` |
 | E_TEST_COMMAND_FORBIDDEN | 危险 test_command | start exit 4 | `test_command rejected` |
 | E_WORKER_CRASH | worker 非 0 且无 receipt | state=failed，放锁 | tombstone error event |
@@ -858,10 +882,10 @@ wanax/
 
 1. 机器上已安装 `git`。
 2. 目标项目有可脚本化测试。没有测试的仓库，工厂应当拒绝，而不是用 LLM “感觉对”。
-3. 用户能提供至少一个贵模型 key 和一个便宜模型 key（可以是同一个 provider 不同 model）。
+3. HTTP commander 需要 `WANAX_COMMANDER_API_KEY`；`claude_cli` / `codex_cli` 不需要。便宜模型 key 仅在配置了独立 reviewer.model 时需要。
 4. OctoLoop 即将开源不构成法律障碍：蚁后是独立控制面，不复制 octoscode 源码。
-5. [NEEDS CLARIFICATION] 用户是要个人自用还是要发布 crates.io。默认按可发布 OSS CLI 写，但不做官网。
-6. [NEEDS CLARIFICATION] 第一适配器是否必须是 octoscode。若本机没有，Phase 1 可用 fake + 任意 `cmd` adapter（用户指定二进制与参数模板）。
+5. v1 按可发布 OSS CLI（MIT）完成，不做官网。
+6. 第一适配器不必是 octoscode；`fake` / `cmd` / `claude` / `codex` 均可。
 
 ### Preferred worker command template
 
@@ -927,7 +951,17 @@ octoscode_bin = "octoscode"
 - `wanax cost` 列出 Run 花费；`RESULT.md` 含 `spent_usd`
 - CI workflow 覆盖 Ubuntu 24.04 与 macOS，`--locked` 构建
 
-明确不做：Issue 驱动、Commander 换成 Claude Code 进程、路由学习、TUI/SaaS/自动合入。
+明确不做：Issue 驱动、路由学习、TUI/SaaS/自动合入。
+
+### Phase 6 — v1 收口（Commander CLI + L1–L3 + 发布级 CI）
+
+范围：FR-030、031、032
+
+完成标准：
+
+- `commander.provider = claude_cli|codex_cli` 用本地 CLI 出 dispatch/verdict JSON，外环仍不写业务代码
+- agent-spec 插件默认跑 `lint` + `verify`（机械 L1–L3）+ `lifecycle`
+- CI 钉死 rustc/clippy 1.97.1；`useless_format` 等 -D warnings 全绿
 
 每个 Phase 结束必须更新 Verification Checklist，未勾选不得开始下一 Phase。
 
@@ -966,12 +1000,12 @@ v1 不做产品分析埋点。
 
 ### 开放问题
 
-- [NEEDS CLARIFICATION] 你要的是个人控制面，还是一个打算让别人装的开源产品？两者的 CLI 完成度差一个数量级。
-- [NEEDS CLARIFICATION] 第一工人必须是 octoscode，还是 `cmd` 通用适配器优先（更不容易卡在别人的 CLI 上）？
-- [NEEDS CLARIFICATION] 目标仓库是不是主要 Rust？若是，Phase 1 可把 `cargo test` + clippy 做成默认 verifier 插件。
-- [NEEDS CLARIFICATION] 是否直接依赖 `agent-spec` crate 做 L1–L3，还是 v1 只复用其契约四段结构、自己做 glob+test 两门？
-- [NEEDS CLARIFICATION] 外环模型与内环模型的具体供应商与型号。
-- [NEEDS CLARIFICATION] 要不要 GitHub Issue 驱动（Orbi 模式）。默认不要，那是另一条产品线。
+- 个人控制面 vs 开源产品：v1 按可发布 OSS CLI 完成（MIT、锁定 toolchain、CI）。
+- 第一工人：`cmd` + 一等 `claude`/`codex`/`octoscode`/`fake` 均可。
+- 默认 verifier：仓库 `test_command`（Rust 默认 `cargo test`）；clippy 在工厂 CI，不进契约默认命令。
+- agent-spec：CLI 插件，不依赖 crate；L1–L3 走 `lint`+`verify`。
+- 外环/内环型号：用户配置；另支持 `claude_cli`/`codex_cli`。
+- GitHub Issue 驱动：不做，属另一条产品线。
 
 ---
 
@@ -1025,6 +1059,12 @@ v1 不做产品分析埋点。
 - [x] `resume` 在多个 active Run 时必须带 run_id
 - [x] `wanax cost` 只读本地花费；`RESULT.md` 含 `spent_usd`
 - [x] CI：Ubuntu 24.04 + macOS，`cargo build --locked` + test + clippy
+
+### Phase 6
+
+- [x] `claude_cli` / `codex_cli` Commander 只出 JSON，不写业务代码
+- [x] agent-spec 默认 `lint` + `verify` + `lifecycle`
+- [x] rust-toolchain + CI 钉 1.97.1；clippy -D warnings 通过
 
 ---
 

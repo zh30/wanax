@@ -89,6 +89,16 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         }
     }
 
+    if let Some(cfg) = &cfg {
+        if wanax_core::commander_is_cli(&cfg.file.commander.provider) {
+            let bin = wanax_core::commander_cli_bin(&cfg.file.commander);
+            match wanax_worker::resolve_cmd_bin(&bin) {
+                Ok(_) => println!("commander {bin}: {}", crate::i18n::t("adapter_ok")),
+                Err(_) => println!("commander {bin}: {}", crate::i18n::t("adapter_missing")),
+            }
+        }
+    }
+
     let cmd_key = std::env::var("WANAX_COMMANDER_API_KEY")
         .ok()
         .filter(|s| !s.is_empty())
@@ -201,7 +211,10 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         }
     }
 
-    if strict && !cmd_key {
+    let commander_cli = cfg
+        .as_ref()
+        .is_some_and(|c| wanax_core::commander_is_cli(&c.file.commander.provider));
+    if strict && !cmd_key && !commander_cli {
         return Err(WanaxError::from_code(ErrorCode::MissingApiKey));
     }
     if strict && !tests_writable.is_empty() {
