@@ -25,7 +25,8 @@ impl PluginReport {
     }
 }
 
-/// Optional agent-spec `lifecycle` gate. Never a hard crate dependency.
+/// Optional agent-spec L1–L3 gate (`lint` + `verify`) plus `lifecycle`.
+/// Never a hard crate dependency.
 pub fn run_verifier_plugins(
     cfg: &ResolvedConfig,
     contract: &Contract,
@@ -67,31 +68,45 @@ pub fn run_verifier_plugins(
         return Ok(PluginReport::skipped("agent-spec", "no spec path"));
     };
     let bin = resolved.unwrap();
-    let out = Command::new(&bin)
-        .args([
-            "lifecycle",
-            spec.to_str().unwrap_or("."),
-            "--code",
-            code_root.to_str().unwrap_or("."),
-            "--format",
-            "json",
-        ])
-        .current_dir(code_root)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .map_err(|e| WanaxError::with_detail(ErrorCode::Plugin, e))?;
+    let commands = if cfg.file.verify.agent_spec_commands.is_empty() {
+        vec![
+            "lint".to_string(),
+            "verify".to_string(),
+            "lifecycle".to_string(),
+        ]
+    } else {
+        cfg.file.verify.agent_spec_commands.clone()
+    };
     let mut excerpt = String::new();
-    excerpt.push_str(&String::from_utf8_lossy(&out.stdout));
-    excerpt.push_str(&String::from_utf8_lossy(&out.stderr));
+    let mut ok = true;
+    for command in &commands {
+        let args = command_args(command, &spec, code_root);
+        let out = Command::new(&bin)
+            .args(&args)
+            .current_dir(code_root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .map_err(|e| WanaxError::with_detail(ErrorCode::Plugin, e))?;
+        excerpt.push_str(&format!("# {command}\n"));
+        excerpt.push_str(&String::from_utf8_lossy(&out.stdout));
+        excerpt.push_str(&String::from_utf8_lossy(&out.stderr));
+        excerpt.push('\n');
+        if !out.status.success() {
+            ok = false;
+            if cfg.file.verify.require_plugins {
+                if excerpt.chars().count() > 4000 {
+                    excerpt = excerpt.chars().take(4000).collect();
+                }
+                return Err(WanaxError::with_detail(
+                    ErrorCode::Plugin,
+                    format!("agent-spec {command} failed: {excerpt}"),
+                ));
+            }
+            break;
+        }
+    }
     if excerpt.chars().count() > 4000 {
         excerpt = excerpt.chars().take(4000).collect();
-    }
-    let ok = out.status.success();
-    if !ok && cfg.file.verify.require_plugins {
-        return Err(WanaxError::with_detail(
-            ErrorCode::Plugin,
-            format!("agent-spec lifecycle failed: {excerpt}"),
-        ));
     }
     Ok(PluginReport {
         ran: true,
@@ -100,6 +115,30 @@ pub fn run_verifier_plugins(
         name: "agent-spec".into(),
         excerpt,
     })
+}
+
+fn command_args(command: &str, spec: &Path, code_root: &Path) -> Vec<String> {
+    let spec = spec.to_str().unwrap_or(".").to_string();
+    let code = code_root.to_str().unwrap_or(".").to_string();
+    match command {
+        "lint" => vec!["lint".into(), spec],
+        "verify" => vec![
+            "verify".into(),
+            spec,
+            "--code".into(),
+            code,
+            "--format".into(),
+            "json".into(),
+        ],
+        _ => vec![
+            command.into(),
+            spec,
+            "--code".into(),
+            code,
+            "--format".into(),
+            "json".into(),
+        ],
+    }
 }
 
 pub fn agent_spec_path(contract: &Contract, repo: &Path) -> Option<PathBuf> {
@@ -154,5 +193,23 @@ mod tests {
         assert!(r.skipped);
         assert!(r.ok);
         assert!(!r.ran);
+    }
+
+    #[test]
+    fn lint_verify_lifecycle_args() {
+        let spec = Path::new("/tmp/task.spec");
+        let code = Path::new("/tmp/code");
+        assert_eq!(
+            command_args("lint", spec, code),
+            vec!["lint".to_string(), "/tmp/task.spec".into()]
+        );
+        assert_eq!(
+            command_args("verify", spec, code)[0],
+            "verify"
+        );
+        assert_eq!(
+            command_args("lifecycle", spec, code)[0],
+            "lifecycle"
+        );
     }
 }

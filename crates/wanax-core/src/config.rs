@@ -38,6 +38,10 @@ pub struct CommanderConfig {
     pub model: String,
     #[serde(default)]
     pub base_url: Option<String>,
+    #[serde(default)]
+    pub cli_bin: String,
+    #[serde(default)]
+    pub cli_args: Vec<String>,
 }
 
 impl Default for CommanderConfig {
@@ -46,6 +50,8 @@ impl Default for CommanderConfig {
             provider: default_provider(),
             model: default_commander_model(),
             base_url: None,
+            cli_bin: String::new(),
+            cli_args: Vec::new(),
         }
     }
 }
@@ -224,6 +230,8 @@ pub struct VerifyConfig {
     pub agent_spec_bin: String,
     #[serde(default)]
     pub require_plugins: bool,
+    #[serde(default = "default_agent_spec_commands")]
+    pub agent_spec_commands: Vec<String>,
 }
 
 impl Default for VerifyConfig {
@@ -232,6 +240,7 @@ impl Default for VerifyConfig {
             plugins: Vec::new(),
             agent_spec_bin: default_agent_spec_bin(),
             require_plugins: false,
+            agent_spec_commands: default_agent_spec_commands(),
         }
     }
 }
@@ -277,6 +286,41 @@ fn default_true() -> bool {
 }
 fn default_agent_spec_bin() -> String {
     "agent-spec".into()
+}
+fn default_agent_spec_commands() -> Vec<String> {
+    vec!["lint".into(), "verify".into(), "lifecycle".into()]
+}
+
+pub fn commander_is_cli(provider: &str) -> bool {
+    matches!(provider, "claude_cli" | "codex_cli")
+}
+
+pub fn commander_cli_bin(cfg: &CommanderConfig) -> String {
+    let trimmed = cfg.cli_bin.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    match cfg.provider.as_str() {
+        "claude_cli" => "claude".into(),
+        "codex_cli" => "codex".into(),
+        _ => String::new(),
+    }
+}
+
+pub fn commander_cli_args(cfg: &CommanderConfig) -> Vec<String> {
+    if !cfg.cli_args.is_empty() {
+        return cfg.cli_args.clone();
+    }
+    match cfg.provider.as_str() {
+        "claude_cli" => vec!["-p".into(), "--dangerously-skip-permissions".into()],
+        "codex_cli" => vec![
+            "exec".into(),
+            "--sandbox".into(),
+            "read-only".into(),
+            "-".into(),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -396,6 +440,7 @@ repo_exclusive = true
 plugins = []
 agent_spec_bin = "agent-spec"
 require_plugins = false
+agent_spec_commands = ["lint", "verify", "lifecycle"]
 "#
     .to_string()
 }
@@ -451,6 +496,7 @@ fn overlay(mut base: FileConfig, over: FileConfig) -> FileConfig {
     if over.verify.plugins.is_empty()
         && !over.verify.require_plugins
         && over.verify.agent_spec_bin == default_agent_spec_bin()
+        && over.verify.agent_spec_commands == default_agent_spec_commands()
     {
         // keep global verify when repo still has the init placeholder
     } else {
@@ -493,6 +539,7 @@ mod tests {
                 provider: default_provider(),
                 model: "anthropic/claude-opus-5".into(),
                 base_url: Some("https://openrouter.ai/api/v1".into()),
+                ..CommanderConfig::default()
             },
             inner: InnerConfig {
                 provider: default_provider(),
@@ -522,6 +569,7 @@ mod tests {
                 provider: default_provider(),
                 model: "global-commander".into(),
                 base_url: Some("https://example.test/v1".into()),
+                ..CommanderConfig::default()
             },
             ..FileConfig::default()
         };
@@ -530,6 +578,7 @@ mod tests {
                 provider: default_provider(),
                 model: "repo-commander".into(),
                 base_url: Some("https://repo.test/v1".into()),
+                ..CommanderConfig::default()
             },
             inner: InnerConfig {
                 provider: default_provider(),
@@ -571,5 +620,35 @@ mod tests {
         assert!(!resolved.file.lock.repo_exclusive);
         assert_eq!(resolved.file.worker.claude_bin, "claude");
         assert_eq!(resolved.file.worker.codex_bin, "codex");
+    }
+
+    #[test]
+    fn commander_cli_defaults() {
+        let claude = CommanderConfig {
+            provider: "claude_cli".into(),
+            ..CommanderConfig::default()
+        };
+        assert_eq!(commander_cli_bin(&claude), "claude");
+        assert_eq!(
+            commander_cli_args(&claude),
+            vec!["-p", "--dangerously-skip-permissions"]
+        );
+        let codex = CommanderConfig {
+            provider: "codex_cli".into(),
+            ..CommanderConfig::default()
+        };
+        assert_eq!(commander_cli_bin(&codex), "codex");
+        assert_eq!(
+            commander_cli_args(&codex),
+            vec!["exec", "--sandbox", "read-only", "-"]
+        );
+        let override_cfg = CommanderConfig {
+            provider: "codex_cli".into(),
+            cli_bin: "/opt/claude".into(),
+            cli_args: vec!["--print".into()],
+            ..CommanderConfig::default()
+        };
+        assert_eq!(commander_cli_bin(&override_cfg), "/opt/claude");
+        assert_eq!(commander_cli_args(&override_cfg), vec!["--print"]);
     }
 }

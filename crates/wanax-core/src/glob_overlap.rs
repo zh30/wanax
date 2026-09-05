@@ -66,7 +66,7 @@ fn pattern_probes(pattern: &str) -> Vec<String> {
         return vec!["file.rs".into(), "src/file.rs".into(), "a/b/c.rs".into()];
     }
     vec![
-        format!("{prefix}"),
+        prefix.to_string(),
         format!("{prefix}/file.rs"),
         format!("{prefix}/nested/x.rs"),
     ]

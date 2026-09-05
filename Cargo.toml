@@ -11,12 +11,12 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
 authors = ["Henry Zhang"]
-repository = "https://github.com/henry/wanax"
+repository = "https://github.com/zh30/wanax"
 
 [workspace.dependencies]
 wanax-core = { path = "crates/wanax-core" }

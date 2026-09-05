@@ -18,7 +18,8 @@ pub mod types;
 
 pub use accept::{enforce_decision, AcceptGates};
 pub use config::{
-    default_config_toml, global_data_dir, load_merged_config, FileConfig, ResolvedConfig,
+    commander_cli_args, commander_cli_bin, commander_is_cli, default_config_toml, global_data_dir,
+    load_merged_config, FileConfig, ResolvedConfig,
 };
 pub use contract::{parse_contract_bytes, parse_contract_file};
 pub use error::{ErrorCode, WanaxError};

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Commander trait, HTTP providers, and Goal self-review"
+description = "Commander trait, HTTP and CLI providers, and Goal self-review"
 
 [dependencies]
 async-trait.workspace = true
@@ -12,6 +12,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+which.workspace = true
 wanax-core.workspace = true
 
 [dev-dependencies]
