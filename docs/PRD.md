@@ -1066,6 +1066,21 @@ v1 不做产品分析埋点。
 - [x] agent-spec 默认 `lint` + `verify` + `lifecycle`
 - [x] rust-toolchain + CI 钉 1.97.1；clippy -D warnings 通过
 
+### NFR
+
+- [x] NFR-1：`wanax status` 在 10k event 墓碑上 p95 < 200ms（`crates/wanax-cli/tests/nfr.rs`）
+- [x] NFR-2：tombstone append+fsync p95 < 50ms（`wanax-tombstone` 单测）
+- [x] NFR-3：`happy_path_fake_accepts` 断言外环 cwd ≠ inner cwd
+- [x] NFR-4：`redact` 单测 + `inner_env_has_no_github_token` 禁止 `ghp_` 入日志
+- [x] NFR-5：`resume_after_kill_accepts`（SIGKILL 后 DB 可开、Run 可恢复）
+- [x] NFR-6：release `wanax` 12.1 MiB（rustc 1.97.1 aarch64-apple-darwin；CI Ubuntu 复测 < 20MB）
+- [x] NFR-7：CI Ubuntu 24.04 + macOS
+- [x] NFR-8：`cargo test` + clippy `-D warnings`
+- [x] NFR-9：默认 repo-exclusive；opt-in path-set
+- [x] NFR-10：默认英文，`--lang zh`
+- [x] NFR-11：无默认遥测 / 账号 / 云端 PII
+- [x] NFR-12：`cargo build --locked`
+
 ---
 
 ## Appendix A — Contract 文件格式（P0 必须能 parse）
@@ -1142,7 +1157,7 @@ Front matter 与标题都要能解析。中文标题别名：
 
 ```
 wanax init [--force]
-wanax start --contract <path> [--allow-dirty] [--adapter octoscode|fake]
+wanax start --contract <path> [--allow-dirty] [--adapter octoscode|fake|cmd|claude|codex]
 wanax status [run_id]
 wanax cancel <run_id>
 wanax doctor [--fix-lock] [--strict]
