@@ -31,4 +31,6 @@ wanax-worker.workspace = true
 tempfile.workspace = true
 toml.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wanax-core.workspace = true
+wanax-tombstone.workspace = true

@@ -257,6 +257,31 @@ mod tests {
         );
         let md =
             fs::read_to_string(markdown_path(tmp.path(), "wx_01AAAAAAAAAAAAAAAAAAAAAAAA")).unwrap();
-        assert!(md.contains("run_started"));
+        assert!(md.contains("run_started"), "{md}");
+    }
+
+    #[test]
+    fn append_event_p95_under_50ms() {
+        let tmp = TempDir::new().unwrap();
+        let run_id = "wx_01AAAAAAAAAAAAAAAAAAAAAAAA";
+        let first = make_event(Actor::System, EventKind::RunStarted, json!({"n": 0}));
+        init_envelope(tmp.path(), run_id, &"ab".repeat(32), "dispatched", first).unwrap();
+        let mut samples = Vec::with_capacity(40);
+        for i in 0..40 {
+            let ev = make_event(Actor::System, EventKind::StateChanged, json!({"n": i}));
+            let t0 = std::time::Instant::now();
+            append_event(tmp.path(), run_id, "dispatched", ev).unwrap();
+            samples.push(t0.elapsed().as_micros());
+        }
+        samples.sort_unstable();
+        let idx = samples
+            .len()
+            .saturating_sub(1)
+            .min(((samples.len() as f64) * 0.95).ceil() as usize - 1);
+        let p95 = samples[idx];
+        assert!(
+            p95 < 50_000,
+            "NFR-2 append p95={p95}µs samples={samples:?}"
+        );
     }
 }

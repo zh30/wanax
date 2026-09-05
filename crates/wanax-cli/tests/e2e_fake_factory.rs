@@ -705,6 +705,36 @@ fn inner_env_has_no_github_token() {
 }
 
 #[test]
+fn inner_git_push_is_denied() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    git(
+        h.path(),
+        &["remote", "add", "origin", "/nonexistent/wanax-remote.git"],
+    );
+    h.write_fake(&format!(
+        "turns = 1\nrun_tests = false\nattempt_push = true\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}'''\n"
+    ));
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+    assert!(
+        !out.stderr.contains("inner git push succeeded"),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
 fn tombstone_restores_events() {
     let h = Harness::new();
     h.set_adapter_fake();

@@ -22,3 +22,15 @@ jobs:
       - run: cargo build --locked --workspace
       - run: cargo test --workspace
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - if: matrix.os == 'ubuntu-24.04'
+        run: cargo build --locked --release -p wanax-cli
+      - name: NFR-6 release binary under 20MB
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          path = "target/release/wanax"
+          size = os.path.getsize(path)
+          print(f"wanax release size: {size} bytes ({size / 1024 / 1024:.2f} MiB)")
+          sys.exit(0 if size < 20 * 1024 * 1024 else 1)
+          PY
