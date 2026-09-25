@@ -209,6 +209,9 @@ model = "gpt-4.1-mini"
 [reviewer]  <span class="cmt"># 空 → 自审降级 mechanical，tombstone 标 self_review=degraded</span>
 [worker]
 adapter = "octoscode"       <span class="cmt"># octoscode|fake|cmd|claude|codex</span>
+timeout_secs = 1800         <span class="cmt"># 超时 → E_WORKER_TIMEOUT → <a href="#e6">E-6</a></span>
+[git]
+protected_refs = ["main","master"]  <span class="cmt"># → <a href="#e7">E-7</a></span>
 [lock]
 repo_exclusive = true       <span class="cmt"># false → 按 allowed_globs 路径锁，不相交可并行</span>
 [budget]
@@ -408,7 +411,7 @@ state=dispatched</pre>
   <div class="chips"><span class="chip">加载/工作中</span><span class="chip">正常</span></div>
   <div class="card-bd">
     <div class="term">
-      <div class="tbar">$ wanax start --contract specs/foo.contract.md</div>
+      <div class="tbar">$ wanax start --contract specs/foo.contract.md <span class="cmt"># 可加 --adapter octoscode|fake|cmd|claude|codex</span></div>
       <pre>wx_01K3RUN…                    <span class="cmt"># run_id（ULID）</span>
 state=contract_ready           <span class="cmt"># 契约 sha256 冻结 · base_sha=HEAD · 建 wanax/&lt;run&gt;/inner|outer 分支</span>
 state=dispatched               <span class="cmt"># 写 LOCK · tombstone run_started · Commander 产出 1 个 WorkUnit</span>
@@ -682,9 +685,9 @@ state=accepted      <span class="cmt"># 第二次绿 → <a href="#c3">C-3</a></
 <span class="cmt">exit 非 0 · 列出越界路径 · 写 RESULT.md（<a href="#d6">D-6</a>）</span></pre>
     </div>
     <div class="term">
-      <div class="tbar">（变体 · 其他原因 reject）</div>
+      <div class="tbar">（变体 · 其他原因 reject —— 当前实现复用 E_WORKER_CRASH 码）</div>
       <pre>state=rejected
-<span class="err">ERROR &lt;code&gt; &lt;commander reason&gt;</span>
+<span class="err">ERROR E_WORKER_CRASH &lt;commander reason&gt;</span>
 <span class="cmt"># 例：changed_files 为空、receipt.test_command 与契约不一致等</span></pre>
     </div>
   </div>
@@ -786,8 +789,13 @@ $ git checkout main
   <div class="card-bd">
     <div class="term">
       <div class="tbar">$ wanax cancel wx_01K3RUN…</div>
-      <pre>state=canceling    <span class="cmt"># SIGTERM worker + start 进程；20s 不死则 SIGKILL</span>
-state=cancelled    <span class="cmt"># tombstone 记 cancelled（actor=human）· 释放 LOCK · 保留 worktree</span></pre>
+      <pre><span class="cmt"># stdout 无输出 —— 内部：state=canceling → SIGTERM worker+start 进程</span>
+<span class="cmt"># 20s 不死 SIGKILL → state=cancelled → tombstone 记 cancelled(actor=human) → 放锁</span>
+<span class="cmt"># 对已终态的 run_id 也静默成功（只补放锁）</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax status wx_01K3RUN… <span class="cmt"># 确认终态的唯一途径</span></div>
+      <pre>state=cancelled</pre>
     </div>
   </div>
   <div class="card-ft">
