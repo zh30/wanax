@@ -1977,15 +1977,22 @@ fn resume_without_id_fails_when_two_active() {
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     let mut two = false;
     while std::time::Instant::now() < deadline {
-        if let Ok(rd) = fs::read_dir(h.path().join(".wanax/locks")) {
-            if rd.filter_map(Result::ok).filter(|e| e.path().is_file()).count() >= 2 {
-                two = true;
-                break;
-            }
+        let locks_ready = fs::read_dir(h.path().join(".wanax/locks"))
+            .map(|rd| {
+                rd.filter_map(Result::ok)
+                    .filter(|e| e.path().is_file())
+                    .count()
+                    >= 2
+            })
+            .unwrap_or(false);
+        let runs_ready = h.run(&["status"], 0).stdout.matches("wx_").count() >= 2;
+        if locks_ready && runs_ready {
+            two = true;
+            break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(two, "expected two path-set locks");
+    assert!(two, "expected two path-set locks and two active runs");
     let resume = h.run(&["resume"], 1);
     assert!(
         resume.stderr.contains("E_RESUME"),

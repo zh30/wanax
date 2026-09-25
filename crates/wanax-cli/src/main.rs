@@ -251,7 +251,7 @@ async fn print_cost(data_dir: PathBuf, run_id: Option<String>) -> Result<(), Wan
             println!("{}", i18n::t("cost_header"));
             for run in runs {
                 println!(
-                    "{:<32} {:<18} {:<10} {:<22} {:<18} {:<10} {:<6}",
+                    "{:<32.32} {:<18.18} {:<10.10} {:<22.22} {:<18.18} {:<10.10} {:<6.6}",
                     run.id,
                     run.state.as_str(),
                     run.worker_adapter.as_str(),
@@ -337,6 +337,7 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
     if run.state.is_terminal() {
         let path = std::path::Path::new(&run.repo_root);
         let _ = wanax_core::lock::release_run_lock(path, &run.id);
+        println!("state={}", run.state.as_str());
         return Ok(());
     }
     let _ = store
@@ -389,5 +390,6 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
         let _ = wanax_tombstone::persist_envelope(&repo, &env);
     }
     let _ = wanax_core::lock::release_run_lock(&repo, &run_id);
+    println!("state={}", run.state.as_str());
     Ok(())
 }
