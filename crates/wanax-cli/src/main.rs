@@ -370,7 +370,14 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
     }
     let repo = PathBuf::from(&run.repo_root);
     if let Ok(mut live) = store.get_run(&run_id).await {
-        if !live.state.is_terminal() {
+        if live.state.is_terminal() {
+            run = live;
+        } else {
+            if live.state != wanax_core::RunState::Canceling {
+                let _ = store
+                    .set_state(&mut live, wanax_core::RunState::Canceling, None)
+                    .await;
+            }
             let _ = store
                 .set_state(&mut live, wanax_core::RunState::Cancelled, None)
                 .await;
