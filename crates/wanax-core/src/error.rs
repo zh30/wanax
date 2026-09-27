@@ -30,6 +30,8 @@ pub enum ErrorCode {
     Resume,
     DagCycle,
     Plugin,
+    Rejected,
+    Escalated,
 }
 
 impl ErrorCode {
@@ -62,6 +64,8 @@ impl ErrorCode {
             Self::Resume => "E_RESUME",
             Self::DagCycle => "E_DAG_CYCLE",
             Self::Plugin => "E_PLUGIN",
+            Self::Rejected => "E_REJECTED",
+            Self::Escalated => "E_ESCALATE",
         }
     }
 
@@ -110,6 +114,8 @@ impl ErrorCode {
             Self::Resume => "cannot resume run",
             Self::DagCycle => "work unit DAG has a cycle",
             Self::Plugin => "verifier plugin failed",
+            Self::Rejected => "verdict rejected",
+            Self::Escalated => "escalated to human",
         }
     }
 }
@@ -200,6 +206,8 @@ mod tests {
             ErrorCode::Resume,
             ErrorCode::DagCycle,
             ErrorCode::Plugin,
+            ErrorCode::Rejected,
+            ErrorCode::Escalated,
         ];
         let mut seen = HashSet::new();
         for c in codes {

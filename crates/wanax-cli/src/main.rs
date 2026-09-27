@@ -251,7 +251,7 @@ async fn print_cost(data_dir: PathBuf, run_id: Option<String>) -> Result<(), Wan
             println!("{}", i18n::t("cost_header"));
             for run in runs {
                 println!(
-                    "{:<32} {:<18} {:<10} {:<22} {:<18} {:<10} {:<6}",
+                    "{:<32.32} {:<18.18} {:<10.10} {:<22.22} {:<18.18} {:<10.10} {:<6.6}",
                     run.id,
                     run.state.as_str(),
                     run.worker_adapter.as_str(),
@@ -337,6 +337,7 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
     if run.state.is_terminal() {
         let path = std::path::Path::new(&run.repo_root);
         let _ = wanax_core::lock::release_run_lock(path, &run.id);
+        println!("state={}", run.state.as_str());
         return Ok(());
     }
     let _ = store
@@ -369,7 +370,14 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
     }
     let repo = PathBuf::from(&run.repo_root);
     if let Ok(mut live) = store.get_run(&run_id).await {
-        if !live.state.is_terminal() {
+        if live.state.is_terminal() {
+            run = live;
+        } else {
+            if live.state != wanax_core::RunState::Canceling {
+                let _ = store
+                    .set_state(&mut live, wanax_core::RunState::Canceling, None)
+                    .await;
+            }
             let _ = store
                 .set_state(&mut live, wanax_core::RunState::Cancelled, None)
                 .await;
@@ -389,5 +397,6 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
         let _ = wanax_tombstone::persist_envelope(&repo, &env);
     }
     let _ = wanax_core::lock::release_run_lock(&repo, &run_id);
+    println!("state={}", run.state.as_str());
     Ok(())
 }

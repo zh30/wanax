@@ -927,7 +927,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 )?;
                 break Err(WanaxError::new(
                     if boundary.ok {
-                        ErrorCode::WorkerCrash
+                        ErrorCode::Rejected
                     } else {
                         ErrorCode::Boundary
                     },
@@ -940,14 +940,10 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             }
             VerdictDecision::Escalate => {
                 store
-                    .set_state(
-                        &mut run,
-                        RunState::Escalate,
-                        Some(ErrorCode::ReworkLimit.default_message().into()),
-                    )
+                    .set_state(&mut run, RunState::Escalate, Some(reason.clone()))
                     .await?;
                 println!("state={}", run.state.as_str());
-                break Err(WanaxError::from_code(ErrorCode::ReworkLimit));
+                break Err(WanaxError::new(ErrorCode::Escalated, reason));
             }
             VerdictDecision::Rework => {
                 if let Some(existing) = unit.as_mut() {
