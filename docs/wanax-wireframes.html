@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>蚁后 Wanax — 低保真线框图（v1 CLI + 文件界面）</title>
+<style>
+  :root {
+    --ink: #111; --mid: #555; --line: #999; --hairline: #ccc;
+    --fill: #eee; --fill2: #f7f7f7; --paper: #fff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 28px 80px;
+    background: var(--paper); color: var(--ink);
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.55;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 {
+    font-size: 16px; margin: 48px 0 4px; padding: 8px 12px;
+    background: var(--ink); color: #fff; letter-spacing: .5px;
+  }
+  .sec-note { margin: 0 0 18px; padding: 8px 12px; border-left: 3px solid var(--mid); color: var(--mid); background: var(--fill2); }
+  .sub { color: var(--mid); margin: 0 0 24px; }
+
+  /* legend + flowmap */
+  .panel { border: 1.5px solid var(--ink); padding: 14px 16px; margin: 16px 0 0; }
+  .panel h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+  .flowmap { font-family: ui-monospace, Menlo, monospace; font-size: 12px; white-space: pre; overflow-x: auto; margin: 0; }
+  .toc { columns: 3; column-gap: 32px; font-size: 13px; margin-top: 8px; }
+  .toc a { color: var(--ink); }
+  .toc div { break-inside: avoid; margin-bottom: 3px; }
+
+  /* screen card */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); gap: 22px; align-items: start; }
+  .card { border: 1.5px solid var(--ink); background: var(--paper); }
+  .card-hd {
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    border-bottom: 1.5px solid var(--ink); padding: 8px 12px; background: var(--fill);
+  }
+  .sid { font-weight: 700; font-size: 15px; }
+  .sname { font-weight: 700; }
+  .pos { margin-left: auto; font-size: 11px; color: var(--mid); }
+  .chips { padding: 6px 12px 0; display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { font-size: 11px; border: 1px solid var(--mid); border-radius: 10px; padding: 0 8px; color: var(--mid); }
+  .card-bd { padding: 12px; }
+  .card-ft { border-top: 1px dashed var(--line); padding: 8px 12px; font-size: 12.5px; }
+  .card-ft p { margin: 3px 0; }
+  .card-ft b { display: inline-block; min-width: 76px; color: var(--mid); font-weight: 600; }
+
+  /* terminal + file mocks */
+  .term, .file { border: 1.5px solid var(--ink); margin: 0 0 10px; }
+  .term .tbar { background: var(--ink); color: #fff; font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 10px; }
+  .term pre, .file pre { margin: 0; padding: 10px 12px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .file .fbar { background: var(--fill); border-bottom: 1.5px solid var(--ink); font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 10px; color: var(--mid); }
+  .file pre { background: var(--fill2); }
+  .cmt { color: var(--mid); }          /* annotation inside mock */
+  .err { font-weight: 700; }
+  .dim { color: var(--line); }
+  .ph {                                /* placeholder block */
+    border: 1.5px dashed var(--line); background: var(--fill);
+    color: var(--mid); text-align: center; padding: 10px 8px; margin: 6px 0;
+    font-size: 11.5px; font-family: ui-monospace, Menlo, monospace;
+  }
+  .lbl { font-size: 11px; color: var(--mid); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .5px; }
+  .hr { border: none; border-top: 1px dashed var(--hairline); margin: 12px 0; }
+  .footnote { margin-top: 48px; padding-top: 12px; border-top: 1.5px solid var(--ink); color: var(--mid); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>蚁后 Wanax — 低保真线框图</h1>
+<p class="sub">v1 无 GUI：「屏」= 终端输出态（stdout/stderr）+ 文件内容态。依据 <code>docs/PRD.md</code> 与现有 CLI 实现文案绘制。黑白灰，仅表达信息层级、核心文案、操作位置与页面状态。</p>
+
+<div class="panel">
+  <h3>读图约定</h3>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:12.5px">
+    <div><b>黑头条</b> = 终端命令及其输出（前景进程）</div>
+    <div><b>灰头条</b> = 文件（路径见条内）</div>
+    <div><b>虚线灰块</b> = 占位块（长输出/正文省略）</div>
+    <div><b>chip</b> = 该屏覆盖的状态类型</div>
+    <div><b>▸ 操作 / 去向</b> = 可执行动作 → 结果屏编号</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h3>流程总览（点击屏号跳转）</h3>
+  <pre class="flowmap">人写契约            wanax start
+  │                     │
+  A-1 init ──► A-3 契约 ──► A-5 doctor ──► B 启动门（契约校验/脏树/锁/adapter/key/危险命令）
+  │   ▲                                         │ 通过
+  A-2 init 失败           A-4 配置+key ◄── B-1..B-5 各拒绝态（exit 非0，不建 Run）
+                                                ▼
+                                          C-1 派发 + 内环工作 ──► C-2 回执 + 外环换树复测
+                                                ▲                      │
+                                                │  E-1 rework ◄────────┤ verdict
+                                                │                      ▼
+                                          E-4 强制 rework        C-3 accepted / E-3 rejected / E-2 escalate
+  旁观随时可入：D-1 status · D-2 status &lt;id&gt; · D-3 cost · D-4 verdict · D-5 TOMBSTONE · D-6 RESULT
+  异常恢复：  F-1 cancel · F-2 resume · F-3 清锁 · F-4 查询错误</pre>
+  <div class="toc">
+    <div><b>A 首次准备</b>：<a href="#a1">A-1</a> <a href="#a2">A-2</a> <a href="#a3">A-3</a> <a href="#a4">A-4</a> <a href="#a5">A-5</a> <a href="#a6">A-6</a></div>
+    <div><b>B 启动门</b>：<a href="#b1">B-1</a> <a href="#b2">B-2</a> <a href="#b3">B-3</a> <a href="#b4">B-4</a> <a href="#b5">B-5</a> <a href="#b6">B-6</a></div>
+    <div><b>C 主流程</b>：<a href="#c1">C-1</a> <a href="#c2">C-2</a> <a href="#c3">C-3</a></div>
+    <div><b>D 旁观查看</b>：<a href="#d1">D-1</a> <a href="#d2">D-2</a> <a href="#d3">D-3</a> <a href="#d4">D-4</a> <a href="#d5">D-5</a> <a href="#d6">D-6</a></div>
+    <div><b>E 分叉终态</b>：<a href="#e1">E-1</a> <a href="#e2">E-2</a> <a href="#e3">E-3</a> <a href="#e4">E-4</a> <a href="#e5">E-5</a> <a href="#e6">E-6</a> <a href="#e7">E-7</a></div>
+    <div><b>F 介入恢复</b>：<a href="#f1">F-1</a> <a href="#f2">F-2</a> <a href="#f3">F-3</a> <a href="#f4">F-4</a></div>
+  </div>
+</div>
+
+<!-- ==================== A ==================== -->
+<h2>A · 首次准备（每个仓库一次性）</h2>
+<p class="sec-note">顺序：init → 写契约 → 配 config + 环境变量 → doctor 体检。任一步失败都不产生 Run。</p>
+<div class="grid">
+
+<div class="card" id="a1">
+  <div class="card-hd"><span class="sid">A-1</span><span class="sname">wanax init — 初始化成功</span><span class="pos">首次使用 · 步骤 1/4</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">首次使用</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax init <span class="cmt"># 在 git 仓库根目录</span></div>
+      <pre>initialized .wanax/ and specs/example.contract.md
+Next: git add .wanax/config.toml specs/</pre>
+    </div>
+    <div class="file">
+      <div class="fbar">生成但未 commit 的文件</div>
+      <pre>.wanax/config.toml      <span class="cmt"># 工厂配置模板</span>
+.wanax/.gitignore       <span class="cmt"># 忽略 worktrees/ LOCK *.db credentials*</span>
+specs/example.contract.md <span class="cmt"># 契约模板</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>编辑契约 → <a href="#a3">A-3</a>；<code>git add … && git commit</code> 后 → <a href="#a4">A-4</a></p>
+    <p><b>▸ 去向</b>成功 → A-3；失败 → <a href="#a2">A-2</a></p>
+  </div>
+</div>
+
+<div class="card" id="a2">
+  <div class="card-hd"><span class="sid">A-2</span><span class="sname">wanax init — 两个失败态</span><span class="pos">首次使用 · 步骤 1/4 的异常</span></div>
+  <div class="chips"><span class="chip">失败</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax init <span class="cmt"># 目录不是 git 仓库</span></div>
+      <pre><span class="err">ERROR E_NOT_GIT not a git repository</span>
+<span class="cmt">exit 2 · 不写任何文件</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax init <span class="cmt"># .wanax/config.toml 已存在</span></div>
+      <pre><span class="err">ERROR E_ALREADY_INIT already initialized</span>
+<span class="cmt">exit 3 · --force 可强制重建</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>进入/初始化 git 仓库重跑；或 <code>wanax init --force</code></p>
+    <p><b>▸ 去向</b>修复后 → <a href="#a1">A-1</a></p>
+  </div>
+</div>
+
+<div class="card" id="a3">
+  <div class="card-hd"><span class="sid">A-3</span><span class="sname">编辑契约 specs/foo.contract.md</span><span class="pos">首次使用 · 步骤 2/4 · 每次任务都要写</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">核心输入屏</span></div>
+  <div class="card-bd">
+    <div class="file">
+      <div class="fbar">specs/split-timeout.contract.md — 人编辑，启动后 hash 冻结</div>
+      <pre>---
+spec: wanax.contract
+version: 1
+name: "split-timeout-module"
+test_command: "cargo test -p foo --timeout-mod"
+test_timeout_secs: 180
+allowed_globs:
+  - "crates/foo/src/**"
+  - "crates/foo/tests/**"
+forbidden_globs:
+  - "**/.env"
+---</pre>
+      <div class="ph">〔正文〕## Intent — 要做什么（1–4000 字符）</div>
+      <div class="ph">〔正文〕## Decisions — 不可重开的决策（1–50 条）</div>
+      <div class="ph">〔正文〕## Boundaries — 允许/禁止路径</div>
+      <div class="ph">〔正文〕## Completion Criteria — CC-01…CC-NN 可机检断言<br>CC-03 可绑 bound_test: timeout_expires_returns_error</div>
+    </div>
+    <p class="lbl">校验红线（违反 → B-1 / B-5）</p>
+    <pre style="font-size:12px;font-family:ui-monospace,Menlo,monospace;margin:0">test_command 非空 · allowed_globs ≥1 条 · CC ≥1 条
+test_command 禁止 rm/sudo/dd/curl|/&gt; 写根目录
+绑定测试放 tests/** 且不进 allowed_globs（否则 <a href="#b6">B-6</a> 警告）</pre>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>保存 + <code>git commit</code> → <a href="#a4">A-4</a> / <a href="#a5">A-5</a> → <code>wanax start</code></p>
+    <p><b>▸ 去向</b>字段缺失 → <a href="#b1">B-1</a>；危险命令 → <a href="#b5">B-5</a>；合格 → <a href="#c1">C-1</a></p>
+  </div>
+</div>
+
+<div class="card" id="a4">
+  <div class="card-hd"><span class="sid">A-4</span><span class="sname">config.toml + 环境变量（凭据/权限）</span><span class="pos">首次使用 · 步骤 3/4 · 权限申请等价物</span></div>
+  <div class="chips"><span class="chip">权限/凭据</span><span class="chip">一次性</span></div>
+  <div class="card-bd">
+    <div class="file">
+      <div class="fbar">~/.wanax/config.toml（repo 内 .wanax/config.toml 覆盖同名键）</div>
+      <pre>[commander]
+provider = "openai_compat"   <span class="cmt"># anthropic|openai|openai_compat|claude_cli|codex_cli</span>
+model = "gpt-4.1"
+base_url = "https://api.openai.com/v1"
+
+[inner]
+provider = "openai_compat"
+model = "gpt-4.1-mini"
+
+[reviewer]  <span class="cmt"># 空 → 自审降级 mechanical，tombstone 标 self_review=degraded</span>
+[worker]
+adapter = "octoscode"       <span class="cmt"># octoscode|fake|cmd|claude|codex</span>
+timeout_secs = 1800         <span class="cmt"># 超时 → E_WORKER_TIMEOUT → <a href="#e6">E-6</a></span>
+[git]
+protected_refs = ["main","master"]  <span class="cmt"># → <a href="#e7">E-7</a></span>
+[lock]
+repo_exclusive = true       <span class="cmt"># false → 按 allowed_globs 路径锁，不相交可并行</span>
+[budget]
+max_usd = "5.00"
+max_inner_turns = 40</pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ 凭据只走环境变量，禁止写进 git / Tombstone</div>
+      <pre>export WANAX_COMMANDER_API_KEY='…' <span class="cmt"># HTTP commander 必需；claude_cli/codex_cli 不需要</span>
+export WANAX_INNER_API_KEY='…'      <span class="cmt"># 仅当 reviewer.model 与 inner.model 不同时需要</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b><code>wanax doctor [--strict]</code> 自检 → <a href="#a5">A-5</a> / <a href="#a6">A-6</a></p>
+    <p><b>▸ 去向</b>缺 key 仍可先跑（fallback 机械 commander）；--strict 缺 key → <a href="#b4">B-4</a> exit 8</p>
+  </div>
+</div>
+
+<div class="card" id="a5">
+  <div class="card-hd"><span class="sid">A-5</span><span class="sname">wanax doctor — 全绿</span><span class="pos">首次使用 · 步骤 4/4 · 起跑前体检</span></div>
+  <div class="chips"><span class="chip">正常</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax doctor --strict</div>
+      <pre>git: ok
+adapter claude: ok
+commander claude: ok               <span class="cmt"># provider=claude_cli 时探 cli_bin</span>
+WANAX_COMMANDER_API_KEY: present   <span class="cmt"># 只报存在与否，不打印值</span>
+WANAX_INNER_API_KEY: present
+lock: none
+disk: writable
+contracts: binding tests outside allowed_globs
+plugin agent-spec: off             <span class="cmt"># 或 ok / missing（启用 [verify] plugins 时）</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b><code>wanax start --contract …</code> → <a href="#c1">C-1</a></p>
+    <p><b>▸ 去向</b>任一项异常 → <a href="#a6">A-6</a> 警告态</p>
+  </div>
+</div>
+
+<div class="card" id="a6">
+  <div class="card-hd"><span class="sid">A-6</span><span class="sname">wanax doctor — 警告 / strict 失败</span><span class="pos">首次使用 · 步骤 4/4 的异常</span></div>
+  <div class="chips"><span class="chip">权限缺失</span><span class="chip">警告</span><span class="chip">失败(--strict)</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax doctor</div>
+      <pre>git: ok
+adapter octoscode: <span class="err">missing</span>      <span class="cmt"># 不在 PATH → start 报 <a href="#b4">B-4</a> E_ADAPTER_MISSING</span>
+WANAX_COMMANDER_API_KEY: <span class="err">missing</span> <span class="cmt"># 警告不阻断；HTTP + --strict → exit 8</span>
+WANAX_INNER_API_KEY: missing    <span class="cmt"># reviewer 未配置时无害</span>
+lock: <span class="err">stale lock pid=4120 run=wx_01K3…</span>  <span class="cmt"># 崩溃残留 → <a href="#f3">F-3</a></span>
+disk: writable
+<span class="err">WARN E_CONTRACT_TESTS_WRITABLE</span> allowed_globs include binding tests; a worker can rewrite them <span class="cmt">(specs/foo.contract.md)</span>
+plugin agent-spec: missing</pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>补 key → <a href="#a4">A-4</a>；装 adapter；<code>--fix-lock</code> → <a href="#f3">F-3</a>；把 tests/** 移出 allowed_globs → <a href="#a3">A-3</a></p>
+    <p><b>▸ 去向</b>--strict 且 key 缺失 → exit 8 E_MISSING_API_KEY；tests 可写 → exit 4</p>
+  </div>
+</div>
+
+</div>
+
+<!-- ==================== B ==================== -->
+<h2>B · 启动门 — wanax start 前置校验（失败均不建 Run、不留锁）</h2>
+<p class="sec-note">契约校验 → 脏树 → 锁 → adapter/key → 危险命令，逐项拦截。任一拒绝都直接回终端，exit 非 0。</p>
+<div class="grid">
+
+<div class="card" id="b1">
+  <div class="card-hd"><span class="sid">B-1</span><span class="sname">start — 契约不合格</span><span class="pos">启动门 · 校验第 1 关</span></div>
+  <div class="chips"><span class="chip">失败</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax start --contract specs/foo.contract.md</div>
+      <pre><span class="err">ERROR E_CONTRACT_INVALID invalid contract: missing allowed_globs, completion_criteria</span>
+<span class="cmt">exit 4 · 列出缺失字段 · 不创建 Run</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>回 <a href="#a3">A-3</a> 补齐四段与 front matter</p>
+    <p><b>▸ 去向</b>修好重跑 → <a href="#c1">C-1</a></p>
+  </div>
+</div>
+
+<div class="card" id="b2">
+  <div class="card-hd"><span class="sid">B-2</span><span class="sname">start — 工作区脏</span><span class="pos">启动门 · 校验第 2 关</span></div>
+  <div class="chips"><span class="chip">失败</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ git status --short</div>
+      <pre> M src/lib.rs          <span class="cmt"># .wanax/ 以外的未提交变更</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax start --contract specs/foo.contract.md</div>
+      <pre><span class="err">ERROR E_DIRTY_WORKTREE dirty worktree; commit, stash, or pass --allow-dirty</span>
+<span class="cmt">exit 5 · base_sha 需可信，默认不替人兜底</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>commit / stash 后重跑；或显式 <code>--allow-dirty</code></p>
+    <p><b>▸ 去向</b>干净 → <a href="#c1">C-1</a></p>
+  </div>
+</div>
+
+<div class="card" id="b3">
+  <div class="card-hd"><span class="sid">B-3</span><span class="sname">start — 仓库被锁</span><span class="pos">启动门 · 校验第 3 关</span></div>
+  <div class="chips"><span class="chip">失败</span><span class="chip">恢复入口</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax start --contract specs/bar.contract.md</div>
+      <pre><span class="err">ERROR E_REPO_LOCKED repo locked by run wx_01K3ACTIVE…</span>
+<span class="cmt">exit 6 · 打印占锁 run_id；path-set 模式下 allowed_globs 相交同此报错</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b><code>wanax status wx_01K3ACTIVE…</code> → <a href="#d2">D-2</a>；等其终态；或 <code>cancel</code> → <a href="#f1">F-1</a>；pid 死 → <code>doctor --fix-lock</code> → <a href="#f3">F-3</a></p>
+    <p><b>▸ 去向</b>锁释放后重跑 → <a href="#c1">C-1</a>；不相交契约（path-set）→ 并行 <a href="#c1">C-1</a></p>
+  </div>
+</div>
+
+<div class="card" id="b4">
+  <div class="card-hd"><span class="sid">B-4</span><span class="sname">start — adapter / key 缺失</span><span class="pos">启动门 · 权限与依赖</span></div>
+  <div class="chips"><span class="chip">权限缺失</span><span class="chip">失败</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax start --contract specs/foo.contract.md <span class="cmt"># adapter 二进制不在 PATH</span></div>
+      <pre><span class="err">ERROR E_ADAPTER_MISSING adapter binary not found: octoscode</span>
+<span class="cmt">exit 8</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax doctor --strict <span class="cmt"># HTTP commander 无 key</span></div>
+      <pre><span class="err">ERROR E_MISSING_API_KEY missing WANAX_COMMANDER_API_KEY</span>
+<span class="cmt">exit 8 · claude_cli/codex_cli 不需要此 key</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>装对应 CLI 或改 <code>worker.adapter</code>/<code>commander.provider</code>；export key → <a href="#a4">A-4</a></p>
+    <p><b>▸ 去向</b>修复 → <a href="#a5">A-5</a> → <a href="#c1">C-1</a></p>
+  </div>
+</div>
+
+<div class="card" id="b5">
+  <div class="card-hd"><span class="sid">B-5</span><span class="sname">start — 危险 test_command</span><span class="pos">启动门 · 安全校验</span></div>
+  <div class="chips"><span class="chip">失败</span><span class="chip">安全</span></div>
+  <div class="card-bd">
+    <div class="file">
+      <div class="fbar">specs/foo.contract.md（摘录）</div>
+      <pre>test_command: "cargo test && rm -rf /"</pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax start --contract specs/foo.contract.md</div>
+      <pre><span class="err">ERROR E_TEST_COMMAND_FORBIDDEN test_command rejected</span>
+<span class="cmt">exit 4 · 黑名单：rm/sudo/mkfs/dd/curl|/wget|/&gt; 写根目录 · argv[0] 白名单</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>回 <a href="#a3">A-3</a> 改成白名单命令（cargo test / npm test / pytest / go test / make test …）</p>
+    <p><b>▸ 去向</b>合格 → <a href="#c1">C-1</a></p>
+  </div>
+</div>
+
+<div class="card" id="b6">
+  <div class="card-hd"><span class="sid">B-6</span><span class="sname">start — 绑定测试可写警告</span><span class="pos">启动门 · 警告但放行</span></div>
+  <div class="chips"><span class="chip">警告</span><span class="chip">正常</span></div>
+  <div class="card-bd">
+    <div class="file">
+      <div class="fbar">specs/foo.contract.md（摘录）</div>
+      <pre>allowed_globs:
+  - "src/**"
+  - "tests/**"   <span class="cmt"># ⚠ 工人可改写验收测试 → 外环复测形同虚设</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax start --contract specs/foo.contract.md</div>
+      <pre><span class="cmt"># tombstone 记 WARN 事件 E_CONTRACT_TESTS_WRITABLE，不阻断</span>
+wx_01K3RUN…
+state=contract_ready
+state=dispatched</pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>默认继续 → <a href="#c1">C-1</a>；稳妥做法回 <a href="#a3">A-3</a> 把 tests/** 移出 allowed</p>
+    <p><b>▸ 去向</b>放行进入主流程；doctor --strict 下同情形 exit 4 → <a href="#a6">A-6</a></p>
+  </div>
+</div>
+
+</div>
+
+<!-- ==================== C ==================== -->
+<h2>C · 主流程 — 一次 wanax start 的前台输出流（Flow A）</h2>
+<p class="sec-note">同一命令的连续输出按段平铺为 C-1 → C-2 → C-3。全程无人值守：无交互提示、无 spinner；人可以离开键盘（tmux / systemd --user 挂后台），不能离开契约。</p>
+<div class="grid">
+
+<div class="card" id="c1">
+  <div class="card-hd"><span class="sid">C-1</span><span class="sname">start · 冻结 → 派发 → 内环工作</span><span class="pos">主流程 · 步骤 1/3</span></div>
+  <div class="chips"><span class="chip">加载/工作中</span><span class="chip">正常</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax start --contract specs/foo.contract.md <span class="cmt"># 可加 --adapter octoscode|fake|cmd|claude|codex</span></div>
+      <pre>wx_01K3RUN…                    <span class="cmt"># run_id（ULID）</span>
+state=contract_ready           <span class="cmt"># 契约 sha256 冻结 · base_sha=HEAD · 建 wanax/&lt;run&gt;/inner|outer 分支</span>
+state=dispatched               <span class="cmt"># 写 LOCK · tombstone run_started · Commander 产出 1 个 WorkUnit</span>
+                               <span class="cmt">#   Commander JSON 非法 → 重试×2 → <a href="#e6">E-6</a> E_COMMANDER_SCHEMA</span>
+state=inner_working
+starting worker pid=4242       <span class="cmt"># inner worktree 拉起 adapter；env 注入 WANAX_RUN_ID/WORK_UNIT_ID/TEST_COMMAND</span>
+                               <span class="cmt">#   不注入 GIT_ASKPASS / GH_TOKEN / ssh 转发（<a href="#e7">E-7</a>）</span></pre>
+    </div>
+    <p class="lbl">期间持续发生（不在 stdout 逐条显示）</p>
+    <pre style="font-size:12px;font-family:ui-monospace,Menlo,monospace;margin:0">每轮工具循环 spent_inner_turns+1 · 每次 LLM 调用记 budget_tick
+超限即停 → <a href="#e5">E-5</a>；worker 崩溃/超时 → <a href="#e6">E-6</a></pre>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>另开终端 <code>wanax status</code> → <a href="#d1">D-1</a>/<a href="#d2">D-2</a>；<code>wanax cancel</code> → <a href="#f1">F-1</a>；或挂 tmux 离开</p>
+    <p><b>▸ 去向</b>worker 退出且收齐回执 → <a href="#c2">C-2</a></p>
+  </div>
+</div>
+
+<div class="card" id="c2">
+  <div class="card-hd"><span class="sid">C-2</span><span class="sname">start · 回执 → 外环换树复测</span><span class="pos">主流程 · 步骤 2/3</span></div>
+  <div class="chips"><span class="chip">加载/工作中</span><span class="chip">正常</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">（同一 start 输出流 · 续）</div>
+      <pre>state=receipt_ready            <span class="cmt"># supervisor 提交 inner commit wx(&lt;run&gt;): &lt;title&gt; + 写 Receipt</span>
+                               <span class="cmt">#   Receipt.claimed_pass 只记录，不作数（FR-009）</span>
+state=outer_reviewing          <span class="cmt"># 新建 outer worktree · checkout inner_sha · 重跑 test_command</span>
+                               <span class="cmt">#   + glob 边界检查（forbidden 命中 → boundary_ok=false）</span>
+                               <span class="cmt">#   + Commander 出 Verdict（不读 inner transcript）</span></pre>
+    </div>
+    <p class="lbl">accept 机械前置（FR-014，模型不可覆盖）</p>
+    <pre style="font-size:12px;font-family:ui-monospace,Menlo,monospace;margin:0">outer exit==0 · boundary_ok · receipt.test_command==契约
+inner_sha 是 base 后代 · changed_files 非空 · 预算未耗尽 · rework≤3
+外环复测超时 → outer_test_exit_code=124 → 不得 accept → <a href="#e1">E-1</a>/<a href="#e2">E-2</a></pre>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>等待；旁观 <a href="#d2">D-2</a>/<a href="#d5">D-5</a></p>
+    <p><b>▸ 去向</b>accept → <a href="#c3">C-3</a>；rework → <a href="#e1">E-1</a>；reject → <a href="#e3">E-3</a>；escalate → <a href="#e2">E-2</a>；模型想 accept 但测试红 → <a href="#e4">E-4</a></p>
+  </div>
+</div>
+
+<div class="card" id="c3">
+  <div class="card-hd"><span class="sid">C-3</span><span class="sname">start · accepted 收尾</span><span class="pos">主流程 · 步骤 3/3 · 终态</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">终态</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">（同一 start 输出流 · 末段）</div>
+      <pre>state=accepted
+wanax/wx_01K3RUN…/inner        <span class="cmt"># ← 交付的本地分支</span>
+ src/timeout.rs | 42 +++++++++++++++++-----------
+ 1 file changed, 28 insertions(+), 14 deletions(-)
+pr=https://github.com/…/pull/12 <span class="cmt"># 仅 github.create_pr=true 或 WANAX_CREATE_PR=1（默认不开）</span></pre>
+    </div>
+    <div class="file">
+      <div class="fbar">同步落盘</div>
+      <pre>.wanax/runs/&lt;id&gt;/RESULT.md    <span class="cmt"># → <a href="#d6">D-6</a></span>
+LOCK 释放 · 主 worktree 不自动 merge</pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>人审分支后自行 <code>git merge wanax/&lt;id&gt;/inner</code> —— P0 禁止 wanax accept 人工盖章</p>
+    <p><b>▸ 去向</b>流程结束；审计 → <a href="#d5">D-5</a></p>
+  </div>
+</div>
+
+</div>
+
+<!-- ==================== D ==================== -->
+<h2>D · 旁观查看 — 运行中 / 事后随时可用</h2>
+<p class="sec-note">只读命令，不改变 Run 状态。均支持 [run_id] 详情模式；未知 id → F-4。</p>
+<div class="grid">
+
+<div class="card" id="d1">
+  <div class="card-hd"><span class="sid">D-1</span><span class="sname">wanax status — 全部 Run 列表</span><span class="pos">旁观 · 任意时刻</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">空态</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax status</div>
+      <pre>Run                              State              Unit     USD        Turns  LastEvent
+wx_01K3RUN…                      inner_working      …0P8W    0.7310     12     2026-09-24T03:12Z
+wx_01K3OLD…                      accepted           …0P8V    1.2044     40     2026-09-23T22:40Z</pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax status <span class="cmt"># 从未跑过</span></div>
+      <pre>No runs.    <span class="cmt"># exit 0（与 E_RUN_NOT_FOUND 的 exit 7 区分）</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b><code>wanax status &lt;id&gt;</code> → <a href="#d2">D-2</a>；<code>--lang zh</code> 表头中文化，错误码仍英文</p>
+    <p><b>▸ 去向</b>—（纯查询）</p>
+  </div>
+</div>
+
+<div class="card" id="d2">
+  <div class="card-hd"><span class="sid">D-2</span><span class="sname">wanax status &lt;id&gt; — 单 Run 详情</span><span class="pos">旁观 · 任意时刻</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">警告变体</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax status wx_01K3RUN…</div>
+      <pre>run_id=wx_01K3RUN…
+state=outer_reviewing
+spent_usd=0.7310
+spent_turns=12
+work_unit=wx_01K3UNIT… 抽出 timeout 模块
+rework_count=1
+outer_test_exit=1 boundary_ok=true decision=rework   <span class="cmt"># 有 verdict 才显示</span>
+last_event=2026-09-24T03:12:44Z
+last_error=…                     <span class="cmt"># 仅失败时出现</span>
+<span class="err">WARN E_CONTRACT_MUTATED</span> contract mutated on disk; run still uses frozen hash
+                               <span class="cmt"># 契约运行中被改：沿用冻结 hash，仅警告</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>改契约？须 <code>cancel</code> <a href="#f1">F-1</a> 后开新 Run（契约冻结）</p>
+    <p><b>▸ 去向</b>未知 id → <a href="#f4">F-4</a> E_RUN_NOT_FOUND</p>
+  </div>
+</div>
+
+<div class="card" id="d3">
+  <div class="card-hd"><span class="sid">D-3</span><span class="sname">wanax cost — 本地花费看板</span><span class="pos">旁观 · 任意时刻 · 不联网</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">空态</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax cost</div>
+      <pre>Run                              State              Adapter    Commander              Inner              USD        Turns
+wx_01K3RUN…                      inner_working      claude     anthropic/claude-opus-5 glm-5.3-flash    0.7310     12</pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax cost wx_01K3RUN… <span class="cmt"># 详情含 budget_tick 流水</span></div>
+      <pre>run_id=wx_01K3RUN…
+state=inner_working
+adapter=claude
+commander_model=anthropic/claude-opus-5
+inner_model=z-ai/glm-5.3-flash
+spent_usd=0.7310
+spent_turns=12
+tick at=03:02:11Z spent_usd=0.4120 estimated=false prompt_tokens=… completion_tokens=…
+tick at=03:09:40Z spent_usd=0.7310 estimated=true …  <span class="cmt"># provider 无 usage → 按费率估算并标 estimated</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>对照 <code>[budget]</code> 决定是否 <code>cancel</code> → <a href="#f1">F-1</a>；只读 SQLite + envelope，不上报</p>
+    <p><b>▸ 去向</b>超支的 Run 自身已进 <a href="#e5">E-5</a></p>
+  </div>
+</div>
+
+<div class="card" id="d4">
+  <div class="card-hd"><span class="sid">D-4</span><span class="sname">wanax verdict &lt;id&gt; — 最近裁决</span><span class="pos">旁观 · 复测后</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">空态</span><span class="chip">失败</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax verdict wx_01K3RUN…</div>
+      <pre>decision=rework
+reason=outer test red: timeout_expires_returns_error
+outer_test_exit_code=1
+boundary_ok=true
+commander_model=anthropic/claude-opus-5</pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax verdict wx_01K3RUN… <span class="cmt"># 尚无裁决 / 未知 id</span></div>
+      <pre>No verdict.                          <span class="cmt"># 未到 outer_reviewing</span>
+<span class="err">ERROR E_RUN_NOT_FOUND run not found</span>  <span class="cmt"># exit 7</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>—（纯只读；不提供人工覆盖 accept）</p>
+    <p><b>▸ 去向</b>决策依据 → <a href="#d5">D-5</a> 墓碑</p>
+  </div>
+</div>
+
+<div class="card" id="d5">
+  <div class="card-hd"><span class="sid">D-5</span><span class="sname">TOMBSTONE.md — 审计账本</span><span class="pos">文件 · 每 Run 一份 · append-only</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">空态</span></div>
+  <div class="card-bd">
+    <div class="file">
+      <div class="fbar">.wanax/runs/wx_01K3RUN…/TOMBSTONE.md — 由 envelope.json 渲染，禁止反解析</div>
+      <pre># Tombstone wx_01K3RUN…
+schema 1.0.0 · contract `ab12cd…` · state **outer_reviewing**
+
+## 2026-09-24T03:01:02Z · run_started · system
+- actor: `system` · id: `wx_…` · payload_sha256: `ff…`</pre>
+      <div class="ph">〔json 块〕{ "base_sha": "aaaa…" }</div>
+      <pre>## 03:01:19Z · unit_dispatched · commander
+## 03:05:41Z · receipt_submitted · master
+## 03:05:52Z · outer_test_started · verifier
+<span class="cmt"># 事件 kind：run_started | unit_dispatched | receipt_submitted |
+#   outer_test_started/finished | verdict | budget_tick |
+#   state_changed | error | cancelled</span></pre>
+    </div>
+    <p class="lbl">空态 / 异常</p>
+    <pre style="font-size:12px;font-family:ui-monospace,Menlo,monospace;margin:0">仅有 run_started（刚启动）· envelope 写失败 → Run failed，不留半截 JSON
+真源是 envelope.json（envelope 与 MD 同源生成）</pre>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>人读 / 喂给工具回放任一 Run：谁派的、测了什么、判了什么</p>
+    <p><b>▸ 去向</b>escalate 排障第一站 → <a href="#e2">E-2</a></p>
+  </div>
+</div>
+
+<div class="card" id="d6">
+  <div class="card-hd"><span class="sid">D-6</span><span class="sname">RESULT.md — 终态摘要文件</span><span class="pos">文件 · 仅 accept/reject 后生成</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">空态</span></div>
+  <div class="card-bd">
+    <div class="file">
+      <div class="fbar">.wanax/runs/wx_01K3RUN…/RESULT.md</div>
+      <pre>decision=accept
+sha=&lt;inner_commit_sha&gt;
+spent_usd=1.2044</pre>
+      <div class="ph">〔test excerpt〕outer 复测输出摘录（≤8000 字符）</div>
+    </div>
+    <p class="lbl">空态</p>
+    <pre style="font-size:12px;font-family:ui-monospace,Menlo,monospace;margin:0">非终态（含 cancelled/failed/escalate/budget_exhausted）→ 文件不存在</pre>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>—（产物文件）</p>
+    <p><b>▸ 去向</b>reject 详情回 <a href="#e3">E-3</a> / <a href="#d4">D-4</a></p>
+  </div>
+</div>
+
+</div>
+
+<!-- ==================== E ==================== -->
+<h2>E · 分叉与终态 — 非 happy path</h2>
+<p class="sec-note">rework 是唯一非终态分支（≤3 次自动重试）；其余五个为终态，保留现场与分支由人接手。</p>
+<div class="grid">
+
+<div class="card" id="e1">
+  <div class="card-hd"><span class="sid">E-1</span><span class="sname">rework — 自动返工循环</span><span class="pos">分叉 · 非终态 · 最多 3 次</span></div>
+  <div class="chips"><span class="chip">恢复</span><span class="chip">正常</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">（同一 start 输出流 · verdict=rework）</div>
+      <pre>state=rework        <span class="cmt"># rework_count+1；新 instruction 携带失败 exit code + 失败测试摘录</span>
+state=dispatched    <span class="cmt"># 同一 WorkUnit 重新进入 <a href="#c1">C-1</a> 派发</span>
+state=inner_working
+…
+state=accepted      <span class="cmt"># 第二次绿 → <a href="#c3">C-3</a></span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>旁观 <a href="#d2">D-2</a>（rework_count 递增）；不想等 → <a href="#f1">F-1</a> cancel</p>
+    <p><b>▸ 去向</b>≤3 次 → 继续循环；第 4 次仍败 → <a href="#e2">E-2</a> escalate</p>
+  </div>
+</div>
+
+<div class="card" id="e2">
+  <div class="card-hd"><span class="sid">E-2</span><span class="sname">escalate — 转人工</span><span class="pos">终态</span></div>
+  <div class="chips"><span class="chip">失败</span><span class="chip">终态</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">（start 输出流 · 末段 · 撞返工上限强制 escalate）</div>
+      <pre>state=escalate
+<span class="err">ERROR E_REWORK_LIMIT max rework exceeded</span>
+<span class="cmt">exit 非 0 · 放锁 · worktree / tombstone / inner 分支全部保留</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">（变体 · commander 主动 escalate）</div>
+      <pre>state=escalate
+<span class="err">ERROR E_ESCALATE &lt;commander reason&gt;</span>
+<span class="cmt"># verdict.reason 直接透出 · 例：需求超出契约范围需人工</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b><a href="#d5">D-5</a> 看完整事件链定位；<a href="#d4">D-4</a> 看最后 verdict；改契约/拆小任务 → 新 Run <a href="#c1">C-1</a></p>
+    <p><b>▸ 去向</b>人可直接接管 inner 分支（工厂不阻拦）</p>
+  </div>
+</div>
+
+<div class="card" id="e3">
+  <div class="card-hd"><span class="sid">E-3</span><span class="sname">rejected — 裁决拒绝</span><span class="pos">终态</span></div>
+  <div class="chips"><span class="chip">失败</span><span class="chip">终态</span><span class="chip">安全</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">（start 输出流 · 末段 · 越界拒）</div>
+      <pre>state=rejected
+<span class="err">ERROR E_BOUNDARY boundary check failed: Cargo.toml</span>
+<span class="cmt">exit 非 0 · 列出越界路径 · 写 RESULT.md（<a href="#d6">D-6</a>）</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">（变体 · 其他原因 reject —— E_REJECTED）</div>
+      <pre>state=rejected
+<span class="err">ERROR E_REJECTED &lt;commander reason&gt;</span>
+<span class="cmt"># 例：changed_files 为空、receipt.test_command 与契约不一致等</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>看 <a href="#d6">D-6</a> RESULT / <a href="#d4">D-4</a> verdict reason；修边界 → <a href="#a3">A-3</a> 新 Run</p>
+    <p><b>▸ 去向</b>分支仍在，人可自行决定是否捡回部分改动</p>
+  </div>
+</div>
+
+<div class="card" id="e4">
+  <div class="card-hd"><span class="sid">E-4</span><span class="sname">E_ACCEPT_OVERRIDE — 模型越权被拦</span><span class="pos">分叉 · 安全网</span></div>
+  <div class="chips"><span class="chip">安全</span><span class="chip">恢复</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">（同一 start 输出流）</div>
+      <pre><span class="cmt"># Commander 输出 accept，但 outer_test_exit_code != 0</span>
+<span class="cmt"># → 系统强制改写为 rework，tombstone 追加 system note E_ACCEPT_OVERRIDE</span>
+state=rework
+state=dispatched</pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>无需操作 —— 机械门（FR-014）不可被模型覆盖</p>
+    <p><b>▸ 去向</b>按正常 rework 走 <a href="#e1">E-1</a>；累计上限 → <a href="#e2">E-2</a></p>
+  </div>
+</div>
+
+<div class="card" id="e5">
+  <div class="card-hd"><span class="sid">E-5</span><span class="sname">budget_exhausted — 预算熔断</span><span class="pos">终态</span></div>
+  <div class="chips"><span class="chip">失败</span><span class="chip">终态</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">（start 输出流 · 末段）</div>
+      <pre>state=budget_exhausted
+<span class="err">ERROR E_BUDGET budget exhausted usd=5.0012 turns=40</span>
+<span class="cmt"># spent_usd ≥ max_usd 或 turns ≥ max_inner_turns 任一触发</span>
+<span class="cmt"># 停发新 LLM 调用 · cancel 在跑 worker（等 cancel_timeout_secs=20s）· 放锁</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b><a href="#d3">D-3</a> cost 看烧在哪；调 <code>[budget]</code> 或缩小契约范围 → 新 Run</p>
+    <p><b>▸ 去向</b>—（终态，不 resume）</p>
+  </div>
+</div>
+
+<div class="card" id="e6">
+  <div class="card-hd"><span class="sid">E-6</span><span class="sname">failed — 运行崩溃族</span><span class="pos">终态 · 四个来源</span></div>
+  <div class="chips"><span class="chip">失败</span><span class="chip">终态</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">（start 输出流 · 末段）</div>
+      <pre>state=failed
+<span class="err">ERROR E_WORKER_CRASH …</span>             <span class="cmt"># worker 非 0 退出且无 receipt</span>
+<span class="err">ERROR E_WORKER_TIMEOUT worker timeout</span> <span class="cmt"># 超 worker.timeout_secs 被杀</span>
+<span class="err">ERROR E_COMMANDER_SCHEMA commander schema invalid</span> <span class="cmt"># 外环 JSON 重试×2 仍非法</span>
+<span class="err">ERROR E_PEER_OVERLAP peer file sets overlap</span>     <span class="cmt"># P1 peer 文件集相交</span></pre>
+    </div>
+    <p class="lbl">相关但不同：外环复测超时</p>
+    <pre style="font-size:12px;font-family:ui-monospace,Menlo,monospace;margin:0">E_OUTER_TEST_TIMEOUT → verdict 记 outer_test_exit_code=124 →
+不得 accept → 走 <a href="#e1">E-1</a> rework / <a href="#e2">E-2</a> escalate，不是 failed</pre>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b><a href="#d2">D-2</a> status 查 last_error；<a href="#d5">D-5</a> 看 error 事件；修环境/契约 → 新 Run</p>
+    <p><b>▸ 去向</b>—（终态；resume 只接非终态 Run → <a href="#f2">F-2</a>）</p>
+  </div>
+</div>
+
+<div class="card" id="e7">
+  <div class="card-hd"><span class="sid">E-7</span><span class="sname">内环越权防护 — push / 受保护 ref</span><span class="pos">安全态 · 任何时刻</span></div>
+  <div class="chips"><span class="chip">安全</span><span class="chip">失败(对内环)</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">inner worktree 内（worker 视角）</div>
+      <pre>$ git push
+<span class="err">fatal: push denied</span>   <span class="cmt"># remote 凭证为空 · GIT_TERMINAL_PROMPT=0 · 无 ssh 转发</span>
+$ git checkout main
+<span class="err">E_PROTECTED_REF protected ref</span>  <span class="cmt"># git wrapper 拦截 main/master</span></pre>
+    </div>
+    <p class="lbl">断言</p>
+    <pre style="font-size:12px;font-family:ui-monospace,Menlo,monospace;margin:0">内环若 push 成功 = P0 安全缺陷（E_PUSH_ATTEMPT 测试必须覆盖）
+推送/开 PR 权只在外环，且默认关闭（<a href="#c3">C-3</a> pr= 行）</pre>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>—（人不可解除；这是工厂法第 1 条）</p>
+    <p><b>▸ 去向</b>—</p>
+  </div>
+</div>
+
+</div>
+
+<!-- ==================== F ==================== -->
+<h2>F · 人工介入与异常恢复</h2>
+<p class="sec-note">人随时可以介入：看 → 停 → 清 → 续 → 捡分支。恢复路径全部回到 B/C。</p>
+<div class="grid">
+
+<div class="card" id="f1">
+  <div class="card-hd"><span class="sid">F-1</span><span class="sname">wanax cancel — 人中途介入（Flow B）</span><span class="pos">介入 · 任意非终态</span></div>
+  <div class="chips"><span class="chip">正常</span><span class="chip">恢复</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax cancel wx_01K3RUN…</div>
+      <pre>state=cancelled <span class="cmt"># 内部：state=canceling → SIGTERM worker+start 进程</span>
+<span class="cmt"># 20s 不死 SIGKILL → tombstone 记 cancelled(actor=human) → 放锁</span>
+<span class="cmt"># 对已终态的 run_id：打印其当前终态（如 state=rejected），只补放锁</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax status wx_01K3RUN… <span class="cmt"># 随时核对终态/明细</span></div>
+      <pre>state=cancelled</pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>人直接 <code>git merge wanax/&lt;id&gt;/inner</code> 捡回成果，不经过工厂</p>
+    <p><b>▸ 去向</b>终态 cancelled；想重来 → 新 Run <a href="#c1">C-1</a></p>
+  </div>
+</div>
+
+<div class="card" id="f2">
+  <div class="card-hd"><span class="sid">F-2</span><span class="sname">wanax resume — 崩溃后续跑</span><span class="pos">恢复 · 仅非终态 Run</span></div>
+  <div class="chips"><span class="chip">恢复</span><span class="chip">失败(误用)</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax resume wx_01K3RUN… <span class="cmt"># kill -9 之后，Run 停在非终态</span></div>
+      <pre>wx_01K3RUN…
+state=dispatched    <span class="cmt"># 接管 stale LOCK，从断点状态继续推进</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax resume <span class="cmt"># 不带 id，且同仓 >1 个非终态 Run（path-set 模式）</span></div>
+      <pre><span class="err">ERROR E_RESUME …</span>  <span class="cmt"># 必须指定 run_id</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>lock 文件残留时先 <code>doctor</code> → <a href="#f3">F-3</a></p>
+    <p><b>▸ 去向</b>接续主流程 <a href="#c1">C-1</a>；Run 已终态则无可恢复</p>
+  </div>
+</div>
+
+<div class="card" id="f3">
+  <div class="card-hd"><span class="sid">F-3</span><span class="sname">锁残留清理（Flow C）</span><span class="pos">恢复 · kill -9 / 进程消失后</span></div>
+  <div class="chips"><span class="chip">恢复</span><span class="chip">失败→正常</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax start --contract specs/foo.contract.md</div>
+      <pre><span class="err">ERROR E_REPO_LOCKED repo locked by run wx_01K3OLD…</span> <span class="cmt"># start 永远不悄悄清锁</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax doctor</div>
+      <pre>lock: stale lock pid=4120 run=wx_01K3OLD…  <span class="cmt"># pid 已死</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax doctor --fix-lock</div>
+      <pre>lock: cleared        <span class="cmt"># 清所有 stale holder；对应非终态 Run 标 failed</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b>重跑 <code>start</code> → <a href="#c1">C-1</a>；或 <code>resume</code> 接旧 Run → <a href="#f2">F-2</a>（若未及标 failed）</p>
+    <p><b>▸ 去向</b>锁清后正常进入启动门 B</p>
+  </div>
+</div>
+
+<div class="card" id="f4">
+  <div class="card-hd"><span class="sid">F-4</span><span class="sname">查询类错误 — 找不到 / 库损坏</span><span class="pos">旁观命令的异常态</span></div>
+  <div class="chips"><span class="chip">失败</span></div>
+  <div class="card-bd">
+    <div class="term">
+      <div class="tbar">$ wanax status wx_NOPE <span class="cmt"># cancel/verdict 同此</span></div>
+      <pre><span class="err">ERROR E_RUN_NOT_FOUND run not found</span>   <span class="cmt"># exit 7</span></pre>
+    </div>
+    <div class="term">
+      <div class="tbar">$ wanax status <span class="cmt"># SQLite 损坏</span></div>
+      <pre><span class="err">ERROR E_DB database error</span>            <span class="cmt"># exit 9</span></pre>
+    </div>
+  </div>
+  <div class="card-ft">
+    <p><b>▸ 可执行操作</b><code>wanax status</code> 无参列表核对 id → <a href="#d1">D-1</a>；DB 损坏需人工处理 ~/.wanax/wanax.db</p>
+    <p><b>▸ 去向</b>—</p>
+  </div>
+</div>
+
+</div>
+
+<div class="footnote">
+  依据 docs/PRD.md（v1 / Phase 6，状态 Implemented）与 crates/wanax-cli 实际输出文案绘制 · 未添加 PRD 之外的功能 ·
+  状态机：draft → contract_ready → dispatched → inner_working → receipt_ready → outer_reviewing → accepted | rejected | rework↺ | escalate；任意非终态 → cancelled | budget_exhausted | failed
+</div>
+
+</body>
+</html>
