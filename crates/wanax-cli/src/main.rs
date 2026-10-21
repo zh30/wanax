@@ -1,6 +1,7 @@
 mod audit;
 mod check;
 mod clean;
+mod diff;
 mod doctor;
 mod engine;
 mod export;
@@ -139,6 +140,12 @@ enum Commands {
     Audit {
         run_id: String,
     },
+    /// Show the run's inner diff (stat by default, --patch for unified).
+    Diff {
+        run_id: String,
+        #[arg(long)]
+        patch: bool,
+    },
     /// Replay the tombstone envelope into reconstructed unit state and
     /// reconcile it against the work_units cache (resume's own view).
     Replay {
@@ -262,6 +269,9 @@ async fn run() -> Result<(), WanaxError> {
         }
         Commands::Replay { run_id, json } => {
             replay_cmd::run(replay_cmd::ReplayCmdOpts { run_id, json, data_dir }).await
+        }
+        Commands::Diff { run_id, patch } => {
+            diff::run(diff::DiffOpts { run_id, patch, data_dir }).await
         }
         Commands::Check { contract, adapter } => {
             check::run(check::CheckOpts {

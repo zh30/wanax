@@ -1867,6 +1867,26 @@ fn bound_test_blocks_vacuous_accept() {
     );
 }
 
+/// `wanax diff` shows the inner branch diff — stat by default, --patch
+/// for the full unified diff.
+#[test]
+fn diff_shows_inner_changes() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    let out = h.run(&["diff", &run_id], 0);
+    assert!(out.stdout.contains("src/lib.rs"), "{}", out.stdout);
+    let out = h.run(&["diff", &run_id, "--patch"], 0);
+    assert!(out.stdout.contains("diff --git"), "{}", out.stdout);
+    assert!(out.stdout.contains("pub fn add"), "{}", out.stdout);
+}
+
 /// [worker] pass_env copies allowed keys into the worker child — agent
 /// CLIs can carry their own credentials — while FORBIDDEN_ENV names
 /// (WANAX_*_API_KEY etc.) still lose unconditionally.
