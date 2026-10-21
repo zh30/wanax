@@ -176,6 +176,7 @@ extra_write_paths = []   # 额外可写目录（用户工具链缓存等）
 | R-21 | 事件溯源 resume | `unit_seeded`/`unit_dispatched`/`receipt_submitted`/`verdict` 携带重建所需全部字段；resume 以 envelope 重放为准，DB 行缺失/分歧时自愈并记 WARN。旧 envelope 缺字段 → 自动回退 DB 路径 | ✅ 已实现+测试 |
 | R-22 | egress 白名单代理 | `[worker] egress = "allowlist"`：worker/test 子进程注入 HTTP(S)_PROXY → 本地 CONNECT 代理只放行白名单域名（base_url host 自动并入），Seatbelt 再 `deny network-outbound` 只留 `localhost:proxy`——绕过代理的直连连 DNS 都不通。`"isolated"` = 完全断网（bwrap 用 `--unshare-net`）。补齐文件沙箱之外的最后一层 | ✅ 已实现+测试 |
 | R-23 | `wanax check` 契约预检 | 机械预检再进 run：bound_test 名字对照 `cargo test -- --list`（缺失 → FAIL exit 4）、allowed_globs 匹配 0 文件/覆盖 tests/ → WARN、test_command 二进制存在性、adapter preflight、egress 空白名单 → FAIL/WARN。把 dogfood 中反复踩到的契约坑左移到 run 之前 | ✅ 已实现+测试 |
+| R-26 | ACP adapter 后端 | `adapter = "acp"`：一个 NDJSON-RPC transport 驱动所有 ACP agent（claude-code-acp / gemini --acp / codex 包装）。initialize→session/new→session/prompt 全交互循环；session/request_permission 自动选 allow 项（OS 沙箱才是真边界）；session/update 收 agent_message_chunk 文本 + usage_update 计量；全环 timeout + 进程组杀 | ✅ 已实现+测试 |
 | R-25 | `wanax audit` 完整性验证 | envelope 声称唯一真源但从未被校验：现在 `audit <run_id>` 重算每事件 payload_sha256、检查序列/id/终态结构不变量，并与 DB 行 + replay 单元集交叉核对。篡改载荷 → E_AUDIT 退出 | ✅ 已实现+测试 |
 | R-24 | diff 密钥扫描门 | `forbidden_globs` 只管路径：worker 把 `sk-…`/`AKIA…`/私钥头写进 `src/*.rs` 以前能完整过门。现在对外环 diff 的新增行做高置信度密钥模式扫描（AWS/GitHub/OpenAI/Stripe/Slack/Google/JWT/私钥头/硬编码凭据）→ `secrets_ok` gate → accept 改判 `reject` + `E_SECRET_LEAK` 事件（只记 path:line:kind，永不记密钥本体） | ✅ 已实现+测试 |
 

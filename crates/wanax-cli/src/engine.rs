@@ -45,6 +45,7 @@ use wanax_verify::{
 };
 use wanax_worker::{
     ClaudeAdapter, CmdAdapter, CodexAdapter, FakeAdapter, OctoscodeAdapter, WorkerAdapter,
+    acp::AcpAdapter,
     WorkerContext,
 };
 
@@ -2785,6 +2786,11 @@ async fn start_adapter(
                 .start(ctx)
                 .await
         }
+        WorkerAdapterKind::Acp => {
+            AcpAdapter::new(worker.acp_bin.clone(), worker.acp_args.clone())
+                .start(ctx)
+                .await
+        }
     }
 }
 
@@ -2825,6 +2831,12 @@ pub(crate) fn preflight_adapter(adapter_kind: WorkerAdapterKind, cfg: &ResolvedC
         WorkerAdapterKind::Codex => CodexAdapter::new(
             cfg.file.worker.codex_bin.clone(),
             cfg.file.worker.codex_args.clone(),
+        )
+        .resolve_bin()
+        .map(|_| ()),
+        WorkerAdapterKind::Acp => AcpAdapter::new(
+            cfg.file.worker.acp_bin.clone(),
+            cfg.file.worker.acp_args.clone(),
         )
         .resolve_bin()
         .map(|_| ()),

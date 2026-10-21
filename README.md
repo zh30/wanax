@@ -166,10 +166,14 @@ base_url = "https://api.openai.com/v1"
 # empty → self-review is mechanical only (tombstone: self_review=degraded)
 
 [worker]
-adapter = "octoscode"   # octoscode | fake | cmd | claude | codex
+adapter = "octoscode"   # octoscode | fake | cmd | claude | codex | acp
 octoscode_bin = "octoscode"
 claude_bin = "claude"
 codex_bin = "codex"
+# acp_bin = "claude-code-acp"  # any agent-client-protocol server; drives
+# acp_args = []                # initialize → session/new → session/prompt
+                              # over stdio NDJSON-RPC (claude-code-acp,
+                              # gemini --acp, codex wrappers, …)
 # cmd = "my-agent"       # PATH name or absolute path when adapter = "cmd"
 # cmd_args = []          # optional; instruction is WANAX_INSTRUCTION, not argv
 # egress = "allowlist"   # off | allowlist | isolated — worker/test children get
@@ -292,7 +296,7 @@ wanax clean --include-dead       # also reclaim crash-orphan runs (non-terminal,
 | Command | Purpose |
 |---|---|
 | `wanax init [--force]` | Create `.wanax/` and an example contract |
-| `wanax start --contract <path> [--adapter octoscode\|fake\|cmd\|claude\|codex] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
+| `wanax start --contract <path> [--adapter octoscode\|fake\|cmd\|claude\|codex\|acp] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
 | `wanax resume [run_id]` | Continue an interrupted non-terminal run (takes over a stale LOCK) |
 | `wanax status [run_id]` | State, spend, current unit, last event |
 | `wanax cost [run_id]` | Local spend board from SQLite / tombstone ticks (no network) |

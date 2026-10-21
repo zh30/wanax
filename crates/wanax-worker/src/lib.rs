@@ -10,6 +10,8 @@ use wanax_core::sandbox::{self, SandboxSpec};
 use wanax_core::types::Receipt;
 use wanax_verify::run_test_command;
 
+pub mod acp;
+
 pub use wanax_core::envenv::{env_has_forbidden, FORBIDDEN_ENV};
 
 #[derive(Debug, Clone)]
@@ -90,7 +92,7 @@ pub fn sanitized_env(ctx: &WorkerContext) -> HashMap<String, String> {
 
 /// Spawn `bin args` through the optional OS sandbox, in its own process group
 /// so timeouts and cancels can kill the whole tree, not just the leader.
-fn spawn_confined(
+pub(crate) fn spawn_confined(
     bin: &Path,
     args: &[String],
     ctx: &WorkerContext,
@@ -701,7 +703,7 @@ fn cancel_pid(pid: u32) -> Result<(), WanaxError> {
     Ok(())
 }
 
-fn tail_8000(stdout: &[u8], stderr: &[u8]) -> String {
+pub(crate) fn tail_8000(stdout: &[u8], stderr: &[u8]) -> String {
     let mut t = String::from_utf8_lossy(stdout).into_owned();
     t.push_str(&String::from_utf8_lossy(stderr));
     t.chars()
@@ -792,7 +794,7 @@ fn parse_codex_jsonl(stdout: &str) -> CliMeter {
     m
 }
 
-fn receipt_from_handle(
+pub(crate) fn receipt_from_handle(
     ctx: &WorkerContext,
     handle: &WorkerHandle,
     adapter: &str,

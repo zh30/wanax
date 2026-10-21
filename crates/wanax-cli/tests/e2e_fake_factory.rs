@@ -1981,6 +1981,79 @@ fn egress_isolated_denies_all_network() {
     assert!(profile.contains("(deny network*)"), "{profile}");
 }
 
+/// ACP adapter: an NDJSON-RPC stub agent drives initialize → session/new →
+/// session/prompt end to end — the prompt asks permission (we answer with
+/// the allow option), writes the fix, streams a chunk, and reports usage.
+#[test]
+fn acp_adapter_drives_agent_through_rpc() {
+    let h = Harness::new();
+    h.write_contract(&contract("src/**"));
+    // ACP stub: speaks newline-delimited JSON-RPC, waits for the
+    // permission reply before writing (proves request→response works).
+    let stub = r#"import json,sys
+def send(o):
+    sys.stdout.write(json.dumps(o)+"\n"); sys.stdout.flush()
+LIB = '''@LIB@'''
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    m=json.loads(line)
+    mid=m.get("id"); meth=m.get("method")
+    if meth=="initialize":
+        send({"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":1,"agentCapabilities":{}}})
+    elif meth=="session/new":
+        send({"jsonrpc":"2.0","id":mid,"result":{"sessionId":"s1"}})
+    elif meth=="session/prompt":
+        send({"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{"sessionId":"s1","options":[{"optionId":"allow","kind":"allow_always"}]}})
+        for r in sys.stdin:
+            m2=json.loads(r)
+            if m2.get("id")==99 and "result" in m2: break
+        open("src/lib.rs","w").write(LIB)
+        send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"wrote lib.rs"}}}})
+        send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","usedTokens":42,"cost":{"amount":0.001,"currency":"USD"}}}})
+        send({"jsonrpc":"2.0","id":mid,"result":{"stopReason":"end_turn"}})
+        break
+"#
+    .replace("@LIB@", GOOD_LIB);
+    let stub_path = h.path().join("acp_stub.py");
+    fs::write(&stub_path, &stub).unwrap();
+    git(h.path(), &["add", "acp_stub.py"]);
+    git(h.path(), &["commit", "-m", "acp stub"]);
+    // [worker] adapter=acp, acp_bin=python3, acp_args=[stub]
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t = t.replace(
+        "adapter = \"octoscode\"",
+        &format!(
+            "adapter = \"acp\"\nacp_bin = \"python3\"\nacp_args = [\"{}\"]",
+            stub_path.display()
+        ),
+    );
+    fs::write(&p, t).unwrap();
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "acp"],
+        0,
+    );
+    assert!(
+        out.stdout.contains("state=accepted"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    // The stub's file made it into the inner branch.
+    let env = h.envelope();
+    let run_id = env["run_id"].as_str().unwrap();
+    let lib = Command::new("git")
+        .args(["show", &format!("wanax/{run_id}/inner:src/lib.rs")])
+        .current_dir(h.path())
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&lib.stdout).contains("a + b"),
+        "acp worker's write never reached the inner branch"
+    );
+}
+
 /// `wanax audit` verifies the tombstone: an intact envelope passes; a
 /// tampered payload is caught by the per-event hash.
 #[test]

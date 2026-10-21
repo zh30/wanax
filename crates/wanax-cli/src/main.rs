@@ -39,6 +39,7 @@ enum AdapterArg {
     Cmd,
     Claude,
     Codex,
+    Acp,
 }
 
 impl From<AdapterArg> for WorkerAdapterKind {
@@ -49,6 +50,7 @@ impl From<AdapterArg> for WorkerAdapterKind {
             AdapterArg::Cmd => Self::Cmd,
             AdapterArg::Claude => Self::Claude,
             AdapterArg::Codex => Self::Codex,
+            AdapterArg::Acp => Self::Acp,
         }
     }
 }

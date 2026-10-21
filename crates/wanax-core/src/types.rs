@@ -158,6 +158,7 @@ pub enum WorkerAdapterKind {
     Cmd,
     Claude,
     Codex,
+    Acp,
 }
 
 impl WorkerAdapterKind {
@@ -168,6 +169,7 @@ impl WorkerAdapterKind {
             Self::Cmd => "cmd",
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Acp => "acp",
         }
     }
 
@@ -178,6 +180,7 @@ impl WorkerAdapterKind {
             "cmd" => Self::Cmd,
             "claude" => Self::Claude,
             "codex" => Self::Codex,
+            "acp" => Self::Acp,
             _ => return None,
         })
     }
@@ -185,7 +188,7 @@ impl WorkerAdapterKind {
     pub fn is_supported(self) -> bool {
         matches!(
             self,
-            Self::Octoscode | Self::Fake | Self::Cmd | Self::Claude | Self::Codex
+            Self::Octoscode | Self::Fake | Self::Cmd | Self::Claude | Self::Codex | Self::Acp
         )
     }
 }
