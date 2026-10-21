@@ -213,6 +213,34 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
         }
     }
 
+    // 5b. must_have criteria: a file the worker is required to produce has
+    // to be writable — i.e. covered by allowed_globs. Literal paths are
+    // checkable; glob patterns get a warn (unverifiable statically).
+    {
+        let allowed = compile_globs(&contract.allowed_globs);
+        for cc in &contract.completion_criteria {
+            for pat in &cc.must_have_files {
+                let literal = !pat.contains('*') && !pat.contains('?') && !pat.contains('[');
+                if globset::Glob::new(pat).is_err() {
+                    push(Level::Fail, "must", format!("{}: must_have `{pat}` is not a valid glob", cc.id));
+                } else if literal {
+                    match &allowed {
+                        Ok(set) if !set.is_match(pat) => push(Level::Fail, "must", format!(
+                            "{}: must_have `{pat}` is not covered by allowed_globs — the worker cannot create it",
+                            cc.id
+                        )),
+                        _ => push(Level::Pass, "must", format!("{}: `{pat}` inside allowed_globs", cc.id)),
+                    }
+                } else {
+                    push(Level::Warn, "must", format!(
+                        "{}: must_have `{pat}` is a glob — coverage vs allowed_globs not statically verifiable",
+                        cc.id
+                    ));
+                }
+            }
+        }
+    }
+
     // 6. Intent quality — the parts no machine can enforce, nudged anyway.
     if contract.intent.trim().is_empty() {
         push(Level::Warn, "intent", "## Intent is empty — the worker has no spec beyond globs".into());

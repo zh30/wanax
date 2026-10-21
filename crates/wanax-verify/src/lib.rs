@@ -25,6 +25,27 @@ pub fn compile_globs(patterns: &[String]) -> Result<GlobSet, WanaxError> {
         .map_err(|e| WanaxError::with_detail(ErrorCode::ContractInvalid, e))
 }
 
+/// `must_have:` files named by criteria that the diff never touched.
+/// Each entry is `CC-NN: pattern`. Exact paths and globs both work;
+/// a pattern is satisfied when at least one changed file matches it.
+pub fn missing_must_have(
+    criteria: &[wanax_core::types::CompletionCriterion],
+    changed: &[String],
+) -> Vec<String> {
+    let mut missing = Vec::new();
+    for cc in criteria {
+        for pat in &cc.must_have_files {
+            let hit = changed
+                .iter()
+                .any(|f| f == pat || globset::Glob::new(pat).map(|g| g.compile_matcher().is_match(f)).unwrap_or(false));
+            if !hit {
+                missing.push(format!("{}: {}", cc.id, pat));
+            }
+        }
+    }
+    missing
+}
+
 /// True when `allowed_globs` can match files under `tests/` (integration tests).
 /// `src/**` alone does not trigger this — unit tests inside `src/` are a separate hole.
 pub fn allowed_globs_cover_binding_tests(patterns: &[String]) -> bool {

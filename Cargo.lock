@@ -1997,6 +1997,7 @@ name = "wanax-cli"
 version = "1.0.0"
 dependencies = [
  "clap",
+ "globset",
  "serde",
  "serde_json",
  "tempfile",

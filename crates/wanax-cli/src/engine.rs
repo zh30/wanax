@@ -1504,6 +1504,24 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             );
         }
 
+        // must_have enforcement: a criterion may name files the solution
+        // must produce — "add module X" that never creates X is rework,
+        // not accept. Same mechanical class as bound_test.
+        let must_missing =
+            wanax_verify::missing_must_have(&contract.completion_criteria, &changed);
+        if !must_missing.is_empty() {
+            let _ = append_event(
+                repo,
+                &run.id,
+                "outer_reviewing",
+                make_event(
+                    Actor::Verifier,
+                    EventKind::MustHave,
+                    json!({ "missing": must_missing }),
+                ),
+            );
+        }
+
         let plugin = match run_verifier_plugins(cfg, &contract, &outer_wt, repo) {
             Ok(p) => p,
             Err(e) => break fail_run(store, repo, &mut run, e).await,
@@ -1557,7 +1575,8 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
         )
         .with_plugin(plugin.ok)
         .with_bound_tests(bound_ok)
-        .with_secrets(secrets.is_empty());
+        .with_secrets(secrets.is_empty())
+        .with_must_have(must_missing.is_empty());
 
         let vctx = VerdictContext {
             contract: contract.clone(),
@@ -1839,7 +1858,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     store.update_work_unit(existing).await?;
                 }
                 rework_notes = Some(format!(
-                    "Previous attempt failed.\nexit={outer_code}\n{}{}{}",
+                    "Previous attempt failed.\nexit={outer_code}\n{}{}{}{}",
                     test.excerpt,
                     if bound_failing.is_empty() {
                         String::new()
@@ -1859,6 +1878,14 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                                 .map(|f| format!("{}:{} ({})", f.path, f.line, f.kind))
                                 .collect::<Vec<_>>()
                                 .join(", ")
+                        )
+                    },
+                    if must_missing.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "must_have files not in diff: {}\n",
+                            must_missing.join(", ")
                         )
                     }
                 ));

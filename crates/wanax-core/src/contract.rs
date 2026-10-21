@@ -219,6 +219,7 @@ fn parse_list_items(body: &str) -> Vec<String> {
 fn parse_criteria(body: &str) -> Vec<CompletionCriterion> {
     let re = Regex::new(r"^-\s*(CC-\d{2,3}):\s*(.+)$").expect("cc regex");
     let bound_re = Regex::new(r"(?i)bound_test:\s*`?([^`\)]+)`?").expect("bound regex");
+    let must_re = Regex::new(r"(?i)must_have:\s*([^\)]+)").expect("must_have regex");
     let mut out = Vec::new();
     for line in body.lines() {
         let t = line.trim();
@@ -230,6 +231,15 @@ fn parse_criteria(body: &str) -> Vec<CompletionCriterion> {
         let bound_test = bound_re
             .captures(&statement)
             .map(|c| c[1].trim().to_string());
+        let must_have_files = must_re
+            .captures(&statement)
+            .map(|c| {
+                c[1].split(',')
+                    .map(|s| s.trim().trim_matches('`').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
         if statement.is_empty() || statement.len() > 300 {
             continue;
         }
@@ -240,7 +250,7 @@ fn parse_criteria(body: &str) -> Vec<CompletionCriterion> {
                 statement
             },
             bound_test,
-            must_have_files: Vec::new(),
+            must_have_files,
         });
     }
     out
