@@ -189,6 +189,11 @@ repo_exclusive = true   # false → path-set lock on allowed_globs; disjoint run
 max_usd = "5.00"
 max_inner_turns = 40
 
+[run]
+# notify_cmd = "osascript -e 'display notification \"$WANAX_STATE\" with title \"wanax\"'"
+# fired once when a run reaches a terminal state; env carries
+# WANAX_RUN_ID / WANAX_STATE / WANAX_SPENT_USD / WANAX_LAST_ERROR
+
 [test]
 default_command = "cargo test"
 # pass_env = []            # extra env keys allowed through to test_command (secrets never pass)

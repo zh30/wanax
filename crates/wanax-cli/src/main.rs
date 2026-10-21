@@ -1,14 +1,15 @@
 mod audit;
 mod check;
-mod export;
 mod clean;
 mod doctor;
 mod engine;
-mod replay;
+mod export;
 mod gh;
 mod i18n;
 mod init;
 mod logging;
+mod notify;
+mod replay;
 mod report;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -521,6 +522,7 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
     let _ = store
         .set_state(&mut run, wanax_core::RunState::Cancelled, None)
         .await;
+    crate::notify::fire_if_terminal(&repo, &run);
     if let Ok(mut env) = wanax_tombstone::load_envelope(&repo, &run_id) {
         env.current_state = "cancelled".into();
         env.events.push(wanax_tombstone::make_event(

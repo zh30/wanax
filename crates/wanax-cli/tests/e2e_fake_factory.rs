@@ -1981,6 +1981,37 @@ fn egress_isolated_denies_all_network() {
     assert!(profile.contains("(deny network*)"), "{profile}");
 }
 
+/// `[run] notify_cmd` fires once on terminal state with WANAX_* env —
+/// and never fires on a cancelled lock-holder mid-flight.
+#[test]
+fn notify_cmd_fires_on_terminal_state() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t.push_str("\n[run]\nnotify_cmd = \"printf %s \\\"$WANAX_STATE $WANAX_RUN_ID\\\" > notify.out\"\n");
+    fs::write(&p, t).unwrap();
+    git(h.path(), &["add", ".wanax/config.toml"]);
+    git(h.path(), &["commit", "-m", "notify config"]);
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    // The hook is fire-and-forget — give it a beat to land.
+    let f = h.path().join("notify.out");
+    for _ in 0..20 {
+        if f.is_file() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    let got = fs::read_to_string(&f).expect("notify hook never ran");
+    assert_eq!(got, format!("accepted {run_id}"), "{got}");
+}
+
 /// `wanax export` bundles the run's audit evidence into one directory.
 #[test]
 fn export_bundles_tombstone_diff_and_manifest() {

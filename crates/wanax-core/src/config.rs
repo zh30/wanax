@@ -30,6 +30,17 @@ pub struct FileConfig {
     pub verify: VerifyConfig,
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    #[serde(default)]
+    pub run: RunConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RunConfig {
+    /// Shell command fired once when a run reaches a terminal state.
+    /// Runs in the repo with WANAX_RUN_ID / WANAX_STATE /
+    /// WANAX_SPENT_USD / WANAX_LAST_ERROR in its environment.
+    #[serde(default)]
+    pub notify_cmd: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -566,6 +577,7 @@ fn overlay(mut base: FileConfig, over: FileConfig) -> FileConfig {
     base.test = over.test;
     base.lock = over.lock;
     base.sandbox = over.sandbox;
+    base.run = over.run;
     if over.verify.plugins.is_empty()
         && !over.verify.require_plugins
         && over.verify.agent_spec_bin == default_agent_spec_bin()
