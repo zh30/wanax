@@ -1548,6 +1548,114 @@ fn dag_units_run_in_dependency_order() {
     assert!(dispatched >= 2, "{env}");
 }
 
+/// Event-sourced resume: wipe every work_units row for a mid-flight dag run
+/// — the tombstone envelope still has unit_seeded/dispatched/receipt/verdict
+/// evidence, so resume rebuilds the unit set and finishes the run.
+#[test]
+fn resume_heals_work_units_from_envelope() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    fs::write(
+        h.path().join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { unimplemented!() }\npub fn mul(a: i32, b: i32) -> i32 { unimplemented!() }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_add() { assert_eq!(super::add(2, 3), 5); }\n    #[test]\n    fn test_mul() { assert_eq!(super::mul(2, 3), 6); }\n}\n",
+    )
+    .unwrap();
+    git(h.path(), &["add", "src/lib.rs"]);
+    git(h.path(), &["commit", "-m", "dag crate"]);
+    h.write_contract(&contract("src/**"));
+    fs::write(
+        h.path().join(".wanax/fake-unit-1.toml"),
+        "turns = 1\nrun_tests = false\nsleep_ms = 60000\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn mul(a: i32, b: i32) -> i32 { unimplemented!() }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_add() { assert_eq!(super::add(2, 3), 5); }\n    #[test]\n    fn test_mul() { assert_eq!(super::mul(2, 3), 6); }\n}\n'''\n",
+    )
+    .unwrap();
+    fs::write(
+        h.path().join(".wanax/fake-unit-2.toml"),
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn mul(a: i32, b: i32) -> i32 { a * b }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_add() { assert_eq!(super::add(2, 3), 5); }\n    #[test]\n    fn test_mul() { assert_eq!(super::mul(2, 3), 6); }\n}\n'''\n",
+    )
+    .unwrap();
+    let script = h.data.path().join("dag.json");
+    fs::write(&script, dag_dispatch_script()).unwrap();
+
+    let mut child = wanax()
+        .args([
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+            "--data-dir",
+        ])
+        .arg(h.data.path())
+        .current_dir(h.path())
+        .env("WANAX_COMMANDER_SCRIPT", &script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Wait until the envelope holds dag evidence (two seeds + a dispatch).
+    let mut run_id = String::new();
+    for _ in 0..300 {
+        std::thread::sleep(Duration::from_millis(100));
+        if let Ok(rd) = fs::read_dir(h.path().join(".wanax/runs")) {
+            if let Some(e) = rd.filter_map(|x| x.ok()).next() {
+                run_id = e.file_name().to_string_lossy().into_owned();
+            }
+        }
+        if !run_id.is_empty() {
+            let env_path =
+                h.path().join(format!(".wanax/runs/{run_id}/envelope.json"));
+            if let Ok(text) = fs::read_to_string(&env_path) {
+                let seeds = text.matches("\"unit_seeded\"").count();
+                if seeds >= 2 && text.contains("\"unit_dispatched\"") {
+                    break;
+                }
+            }
+        }
+    }
+    assert!(!run_id.is_empty(), "no run started");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    // The cache is gone — the envelope is all that remains.
+    let db = h.data.path().join("wanax.db");
+    let wiped = Command::new("sqlite3")
+        .arg(&db)
+        .arg("DELETE FROM work_units")
+        .status()
+        .expect("sqlite3");
+    assert!(wiped.success());
+
+    // Make the inner steps fast for the resumed run.
+    for n in ["fake-unit-1.toml", "fake-unit-2.toml"] {
+        let p = h.path().join(".wanax").join(n);
+        let t = fs::read_to_string(&p).unwrap().replace("sleep_ms = 60000\n", "");
+        fs::write(&p, t).unwrap();
+    }
+    let out = h.run(&["resume", &run_id, "--adapter", "fake"], 0);
+    assert!(
+        out.stdout.contains("state=accepted"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    // Replay healed the cache: both dag units exist again in the DB.
+    let healed = Command::new("sqlite3")
+        .arg(&db)
+        .arg("SELECT COUNT(*) FROM work_units")
+        .output()
+        .expect("sqlite3 count");
+    assert_eq!(String::from_utf8_lossy(&healed.stdout).trim(), "2");
+    // …and the divergence was logged to the tombstone.
+    let env = h.envelope();
+    assert!(
+        env["events"].as_array().unwrap().iter().any(|e| {
+            e["kind"] == "error" && e["payload"]["detail"].as_str()
+                .unwrap_or("").contains("rebuilt from envelope")
+        }),
+        "{env}"
+    );
+}
+
 /// DAG wave parallelism: independent ready units with disjoint allowed_globs
 /// are dispatched together as one peer batch — one outer review accepts the
 /// whole wave — then dependents run after.

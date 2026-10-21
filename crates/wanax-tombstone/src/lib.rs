@@ -46,6 +46,7 @@ impl Actor {
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     RunStarted,
+    UnitSeeded,
     UnitDispatched,
     ReceiptSubmitted,
     OuterTestStarted,
@@ -63,6 +64,7 @@ impl EventKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RunStarted => "run_started",
+            Self::UnitSeeded => "unit_seeded",
             Self::UnitDispatched => "unit_dispatched",
             Self::ReceiptSubmitted => "receipt_submitted",
             Self::OuterTestStarted => "outer_test_started",

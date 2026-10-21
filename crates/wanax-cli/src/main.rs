@@ -1,6 +1,7 @@
 mod clean;
 mod doctor;
 mod engine;
+mod replay;
 mod gh;
 mod i18n;
 mod init;

@@ -1,5 +1,6 @@
 use crate::gh::maybe_create_github_pr;
 use crate::logging;
+use crate::replay;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
@@ -734,7 +735,7 @@ async fn run_factory(
     let inner_sandbox = sandbox_for(cfg, repo, &run.id, &inner_wt, "inner")?;
 
     let mut started_payload =
-        json!({ "base_sha": base_sha, "sandbox": inner_sandbox.backend.as_str(), "adapter": adapter_kind.as_str() });
+        json!({ "base_sha": base_sha, "sandbox": inner_sandbox.backend.as_str(), "adapter": adapter_kind.as_str(), "contract_path": contract.path });
     if let Some(r) = rsi {
         started_payload["iteration"] = json!(r.iteration);
         if let Some(p) = &r.parent_run_id {
@@ -865,17 +866,81 @@ async fn continue_factory(
         ),
     );
 
-    let existing = store.work_units_for_run(&run.id).await?;
+    let mut existing = store.work_units_for_run(&run.id).await?;
+    let mut pending_outer = None;
+
+    // The tombstone envelope is the source of truth: when it carries
+    // replay-complete unit evidence, rebuild `existing` from the event
+    // stream and heal any diverged/missing DB rows. Old envelopes lack
+    // unit_seeded events — replay returns None and the DB path is kept.
+    if let Some(snap) = replay::envelope_snapshot(repo, &run.id) {
+        if !snap.units.is_empty() {
+            if replay::units_diverged(&existing, &snap.units) {
+                let _ = append_event(
+                    repo,
+                    &run.id,
+                    run.state.as_str(),
+                    make_event(
+                        Actor::System,
+                        EventKind::Error,
+                        json!({
+                            "code": ErrorCode::Resume.as_str(),
+                            "note": "WARN",
+                            "detail": "db work_units diverged from tombstone; rebuilt from envelope",
+                        }),
+                    ),
+                );
+                for u in &snap.units {
+                    match store.get_work_unit(&u.id).await {
+                        Ok(dbu)
+                            if dbu.state == u.state
+                                && dbu.rework_count == u.rework_count
+                                && dbu.receipt_id == u.receipt_id => {}
+                        Ok(_) => {
+                            store.update_work_unit(u).await?;
+                        }
+                        Err(_) => {
+                            store.insert_work_unit(u).await?;
+                        }
+                    }
+                }
+            }
+            existing = snap.units.clone();
+            if matches!(
+                run.state,
+                RunState::ReceiptReady | RunState::OuterReviewing
+            ) {
+                if let Some((uid, rid)) = &snap.pending {
+                    if let Some(u) = snap.units.iter().find(|x| &x.id == uid) {
+                        let receipt = match store.get_receipt(rid).await {
+                            Ok(r) => r,
+                            Err(_) => {
+                                let stub = &snap.receipts[uid];
+                                replay::synthesize_receipt(
+                                    stub,
+                                    &contract.test_command,
+                                    adapter_kind.as_str(),
+                                )
+                            }
+                        };
+                        pending_outer = Some((u.clone(), receipt));
+                    }
+                }
+            }
+        }
+    }
+
     let dag_units = existing
         .iter()
         .any(|u| u.local_key.is_some() || !u.depends_on.is_empty())
         .then(|| existing.clone());
     let unit = existing.last().cloned();
-    let mut pending_outer = None;
-    if matches!(
-        run.state,
-        RunState::ReceiptReady | RunState::OuterReviewing
-    ) {
+    if pending_outer.is_none()
+        && matches!(
+            run.state,
+            RunState::ReceiptReady | RunState::OuterReviewing
+        )
+    {
         if let Some(u) = unit.clone() {
             if let Some(rid) = &u.receipt_id {
                 if let Ok(receipt) = store.get_receipt(rid).await {
@@ -1032,6 +1097,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     adapter_kind,
                     base_sha: &base_sha,
                     peers,
+                    covers: wave_ids.clone(),
                     gitconfig: &gitconfig,
                     test_env: &test_env,
                     inner_sandbox: &inner_sandbox,
@@ -1159,6 +1225,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                         adapter_kind,
                         base_sha: &base_sha,
                         peers,
+                        covers: Vec::new(),
                         gitconfig: &gitconfig,
                         test_env: &test_env,
                         inner_sandbox: &inner_sandbox,
@@ -1166,7 +1233,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     .await
                 }
                 DispatchPlan::Dag(drafts) => {
-                    match seed_dag_units(store, &run.id, drafts).await {
+                    match seed_dag_units(store, repo, &run.id, drafts).await {
                         Ok(seeded) => {
                             dag_units = Some(seeded);
                             continue;
@@ -1223,7 +1290,9 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     EventKind::ReceiptSubmitted,
                     json!({
                         "receipt_id": receipt.id,
+                        "work_unit_id": u.id,
                         "claimed_pass": receipt.claimed_pass,
+                        "test_exit_code": receipt.test_exit_code,
                         "changed_files": receipt.changed_files,
                         "commit_sha": receipt.commit_sha,
                     }),
@@ -1557,6 +1626,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 json!({
                     "decision": decision.as_str(),
                     "reason": reason,
+                    "work_unit_id": u.id,
                     "outer_test_exit_code": outer_code,
                     "boundary_ok": boundary.ok,
                     // Lets fitness tooling separate real red→green fixes from
@@ -1804,6 +1874,9 @@ struct PeerBatchParams<'a> {
     adapter_kind: WorkerAdapterKind,
     base_sha: &'a str,
     peers: Vec<PeerUnitDraft>,
+    /// Dag unit ids this wave covers (empty for explicit peer batches) —
+    /// recorded in unit_dispatched so replay can mark the covered units.
+    covers: Vec<String>,
     gitconfig: &'a Path,
     test_env: &'a HashMap<String, String>,
     inner_sandbox: &'a SandboxSpec,
@@ -1867,10 +1940,18 @@ async fn run_single_unit(params: InnerSingleParams<'_>) -> Result<InnerPhaseResu
         make_event(
             Actor::Commander,
             EventKind::UnitDispatched,
+            // Envelope is the source of truth — every field needed to replay
+            // this unit after a crash lives here.
             json!({
                 "work_unit_id": u.id,
                 "title": u.title,
                 "instruction": u.instruction,
+                "seq": u.seq,
+                "role": u.assignee_role.as_str(),
+                "local_key": u.local_key,
+                "depends_on": u.depends_on,
+                "allowed_globs": u.allowed_globs,
+                "test_command": u.test_command,
             }),
         ),
     );
@@ -1940,6 +2021,7 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
         adapter_kind,
         base_sha,
         peers,
+        covers,
         gitconfig,
         test_env,
         inner_sandbox,
@@ -2009,8 +2091,10 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
             json!({
                 "work_unit_id": master.id,
                 "title": master.title,
+                "instruction": master.instruction,
                 "mode": "peer_batch",
                 "peer_count": peers.len(),
+                "covers": covers,
             }),
         ),
     );
@@ -2069,6 +2153,25 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
             verdict_id: None,
         };
         store.insert_work_unit(&peer_unit).await?;
+        let _ = append_event(
+            repo,
+            &run.id,
+            "inner_working",
+            make_event(
+                Actor::Master,
+                EventKind::UnitSeeded,
+                json!({
+                    "work_unit_id": peer_unit.id,
+                    "seq": peer_unit.seq,
+                    "title": peer_unit.title,
+                    "instruction": peer_unit.instruction,
+                    "role": peer_unit.assignee_role.as_str(),
+                    "parent_id": peer_unit.parent_id,
+                    "local_key": peer_unit.local_key,
+                    "allowed_globs": peer_unit.allowed_globs,
+                }),
+            ),
+        );
 
         let fake_src = repo
             .join(".wanax")
@@ -2159,7 +2262,10 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
                 EventKind::ReceiptSubmitted,
                 json!({
                     "work_unit_id": pr.unit.id,
+                    "receipt_id": peer_receipt.id,
                     "commit_sha": peer_receipt.commit_sha,
+                    "test_exit_code": peer_receipt.test_exit_code,
+                    "claimed_pass": peer_receipt.claimed_pass,
                     "changed_files": peer_receipt.changed_files,
                 }),
             ),
@@ -2344,6 +2450,7 @@ fn next_ready_dag(units: &[WorkUnit]) -> Option<WorkUnit> {
 
 async fn seed_dag_units(
     store: &Store,
+    repo: &Path,
     run_id: &str,
     drafts: Vec<DagUnitDraft>,
 ) -> Result<Vec<WorkUnit>, WanaxError> {
@@ -2387,6 +2494,28 @@ async fn seed_dag_units(
             .filter_map(|k| by_key.get(k).cloned())
             .collect();
         store.insert_work_unit(&unit).await?;
+        // Replay-complete evidence: the envelope alone must be enough to
+        // rebuild the dag set after a crash.
+        let _ = append_event(
+            repo,
+            run_id,
+            "dispatched",
+            make_event(
+                Actor::Commander,
+                EventKind::UnitSeeded,
+                json!({
+                    "work_unit_id": unit.id,
+                    "seq": unit.seq,
+                    "title": unit.title,
+                    "instruction": unit.instruction,
+                    "role": unit.assignee_role.as_str(),
+                    "local_key": unit.local_key,
+                    "depends_on": unit.depends_on,
+                    "allowed_globs": unit.allowed_globs,
+                    "test_command": unit.test_command,
+                }),
+            ),
+        );
         out.push(unit);
     }
     Ok(out)

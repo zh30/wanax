@@ -173,6 +173,7 @@ extra_write_paths = []   # 额外可写目录（用户工具链缓存等）
 | R-18 | bound_test 机械化 | 契约 `bound_test:` 注解从死字段变成机械门：cargo 先 `-- --list` 验证测试存在（防 0-match 假绿），再 `-- --exact` 跑绿；失败→rework | ✅ 已实现+测试 |
 | R-19 | LEARNINGS 生命周期层 | `## lifetime` 头由全部 entry 重算（runs/accepts/top_errors/契约维度）——长寿命统计不随 20 行注入窗口滑出 | ✅ 已实现+测试 |
 | R-20 | 契约趋势序列 | `report` 每契约输出时序终态 `[AEFFA]`——收敛方向一眼可见 | ✅ 已实现+测试 |
+| R-21 | 事件溯源 resume | `unit_seeded`/`unit_dispatched`/`receipt_submitted`/`verdict` 携带重建所需全部字段；resume 以 envelope 重放为准，DB 行缺失/分歧时自愈并记 WARN。旧 envelope 缺字段 → 自动回退 DB 路径 | ✅ 已实现+测试 |
 
 **RSI 不变量**：
 - 契约 sha256 冻结规则不变——跨迭代变化的只有 evidence/notes，它们走 `DispatchContext.rsi_notes`，不进契约文件
