@@ -151,7 +151,7 @@ You write the contract every time. You do not retune the factory every time.
 
 ```toml
 [commander]
-provider = "openai_compat"   # openai | openai_compat | anthropic | claude_cli | codex_cli
+provider = "openai_compat"   # openai | openai_compat | openai_responses | anthropic | claude_cli | codex_cli
 model = "gpt-4.1"
 base_url = "https://api.openai.com/v1"
 # cli_bin = "claude"         # when provider is claude_cli / codex_cli
@@ -209,7 +209,7 @@ Keys come only from the environment. They are never written to git or to the tom
 | `WANAX_INNER_API_KEY` | Semantic self-review when `reviewer.model` ≠ `inner.model` |
 | `WANAX_DATA_DIR` | SQLite home (default `~/.wanax`) |
 
-`provider = "openai_compat"` plus `base_url` is the hook for any Chat Completions host. There is no separate `openrouter` provider. Consumer chat subscriptions (including SuperGrok) are a different ledger; Wanax talks to the HTTP API only.
+`provider = "openai_compat"` plus `base_url` is the hook for any Chat Completions host; `openai_responses` targets the Responses API (`/v1/responses`, the current surface for o-*/gpt-5 reasoning models). There is no separate `openrouter` provider. Consumer chat subscriptions (including SuperGrok) are a different ledger; Wanax talks to the HTTP API only.
 
 ### OpenRouter
 

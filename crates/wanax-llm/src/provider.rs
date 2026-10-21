@@ -10,6 +10,7 @@ pub enum ProviderKind {
     Anthropic,
     OpenAi,
     OpenAiCompat,
+    OpenAiResponses,
 }
 
 impl ProviderKind {
@@ -18,6 +19,7 @@ impl ProviderKind {
             "anthropic" => Ok(Self::Anthropic),
             "openai" => Ok(Self::OpenAi),
             "openai_compat" => Ok(Self::OpenAiCompat),
+            "openai_responses" => Ok(Self::OpenAiResponses),
             other => Err(WanaxError::new(
                 ErrorCode::CommanderSchema,
                 format!("unknown LLM provider: {other}"),
@@ -76,7 +78,9 @@ impl LiveClient {
 fn default_base(kind: ProviderKind) -> &'static str {
     match kind {
         ProviderKind::Anthropic => "https://api.anthropic.com",
-        ProviderKind::OpenAi | ProviderKind::OpenAiCompat => "https://api.openai.com/v1",
+        ProviderKind::OpenAi | ProviderKind::OpenAiCompat | ProviderKind::OpenAiResponses => {
+            "https://api.openai.com/v1"
+        }
     }
 }
 
@@ -96,8 +100,78 @@ impl CompletionClient for LiveClient {
             ProviderKind::OpenAi | ProviderKind::OpenAiCompat => {
                 openai_complete(self, system, user, model, json_mode).await
             }
+            ProviderKind::OpenAiResponses => {
+                responses_complete(self, system, user, model, json_mode).await
+            }
         }
     }
+}
+
+/// OpenAI Responses API (`POST /v1/responses`) — the current surface for
+/// reasoning models (o-*/gpt-5-pro). `instructions` carries the system
+/// role; `text.format` requests structured JSON.
+async fn responses_complete(
+    client: &LiveClient,
+    system: &str,
+    user: &str,
+    model: &str,
+    json_mode: bool,
+) -> Result<Completion, WanaxError> {
+    let url = format!("{}/responses", client.base_url.trim_end_matches('/'));
+    let mut body = serde_json::json!({
+        "model": model,
+        "instructions": system,
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": user}]}]
+    });
+    if json_mode {
+        body["text"] = serde_json::json!({"format": {"type": "json_object"}});
+    }
+    let res = client
+        .http
+        .post(url)
+        .bearer_auth(&client.api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(map_llm_err)?;
+    let status = res.status();
+    let value: Value = res.json().await.map_err(map_llm_err)?;
+    if !status.is_success() {
+        return Err(WanaxError::new(
+            ErrorCode::CommanderSchema,
+            format!("commander schema invalid: HTTP {status}"),
+        ));
+    }
+    parse_responses_body(&value)
+}
+
+/// Responses API output: top-level `output_text` shortcut, else walk
+/// `output[]` for message items' `output_text` content parts.
+pub fn parse_responses_body(value: &Value) -> Result<Completion, WanaxError> {
+    let text = value
+        .get("output_text")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            value.get("output")?.as_array()?.iter().find_map(|item| {
+                if item.get("type").and_then(Value::as_str) != Some("message") {
+                    return None;
+                }
+                item.get("content")?.as_array()?.iter().find_map(|c| {
+                    if c.get("type").and_then(Value::as_str) == Some("output_text") {
+                        c.get("text").and_then(Value::as_str).map(str::to_string)
+                    } else {
+                        None
+                    }
+                })
+            })
+        })
+        .ok_or_else(|| WanaxError::from_code(ErrorCode::CommanderSchema))?;
+    Ok(Completion {
+        text,
+        prompt_tokens: value.pointer("/usage/input_tokens").and_then(Value::as_u64),
+        completion_tokens: value.pointer("/usage/output_tokens").and_then(Value::as_u64),
+    })
 }
 
 async fn openai_complete(
@@ -298,6 +372,7 @@ impl CompletionClient for FixtureClient {
         match self.kind {
             ProviderKind::Anthropic => parse_anthropic_body(&body),
             ProviderKind::OpenAi | ProviderKind::OpenAiCompat => parse_openai_body(&body),
+            ProviderKind::OpenAiResponses => parse_responses_body(&body),
         }
     }
 }
@@ -329,6 +404,45 @@ mod tests {
         assert_eq!(c.text, "ok");
         assert_eq!(c.prompt_tokens, Some(3));
         assert_eq!(c.completion_tokens, Some(4));
+    }
+
+    #[test]
+    fn responses_output_text_shortcut_and_nested() {
+        // output_text convenience field
+        let v = json!({
+            "output_text": "{\"decision\":\"accept\"}",
+            "usage": {"input_tokens": 5, "output_tokens": 9}
+        });
+        let c = parse_responses_body(&v).unwrap();
+        assert_eq!(c.text, "{\"decision\":\"accept\"}");
+        assert_eq!(c.completion_tokens, Some(9));
+        // nested output[] form (no shortcut)
+        let v = json!({
+            "output": [
+                {"type": "reasoning", "summary": []},
+                {"type": "message", "content": [
+                    {"type": "output_text", "text": "first"},
+                    {"type": "output_text", "text": "second"}
+                ]}
+            ],
+            "usage": {"input_tokens": 3}
+        });
+        let c = parse_responses_body(&v).unwrap();
+        assert_eq!(c.text, "first");
+    }
+
+    #[test]
+    fn responses_empty_output_fails() {
+        let v = json!({"output": [{"type": "reasoning"}]});
+        assert!(parse_responses_body(&v).is_err());
+    }
+
+    #[test]
+    fn provider_kind_parses_openai_responses() {
+        assert_eq!(
+            ProviderKind::parse("openai_responses").unwrap(),
+            ProviderKind::OpenAiResponses
+        );
     }
 
     #[test]
