@@ -1901,6 +1901,86 @@ fn bound_test_accepts_when_test_exists() {
     assert_eq!(bt["payload"]["listed"], true, "{env}");
 }
 
+/// egress = "allowlist": the run starts an allowlist proxy, confines the
+/// inner sandbox to localhost-only outbound, injects proxy env into the
+/// worker, and records the mode in run_started.
+#[test]
+fn egress_allowlist_confines_worker_network() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t = t.replace(
+        "adapter = \"fake\"",
+        "adapter = \"fake\"\negress = \"allowlist\"\negress_allow = [\"api.anthropic.com\"]",
+    );
+    fs::write(&p, t).unwrap();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+
+    let env = h.envelope();
+    let started = env["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "run_started")
+        .expect("run_started");
+    let egress = started["payload"]["egress"].as_str().unwrap_or("");
+    assert!(egress.starts_with("allowlist:"), "{env}");
+
+    // The inner sandbox profile denies outbound except the local proxy.
+    let runs = h.path().join(".wanax/runs");
+    let profile = fs::read_dir(&runs)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .find_map(|e| {
+            let p = e.path().join("sandbox-inner.sb");
+            p.is_file().then(|| fs::read_to_string(p).unwrap())
+        })
+        .expect("inner sb profile");
+    assert!(
+        profile.contains("(deny network-outbound)")
+            && profile.contains("(remote tcp \"localhost:"),
+        "{profile}"
+    );
+}
+
+/// egress = "isolated": no proxy, no network at all.
+#[test]
+fn egress_isolated_denies_all_network() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t = t.replace(
+        "adapter = \"fake\"",
+        "adapter = \"fake\"\negress = \"isolated\"",
+    );
+    fs::write(&p, t).unwrap();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+    let runs = h.path().join(".wanax/runs");
+    let profile = fs::read_dir(&runs)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .find_map(|e| {
+            let p = e.path().join("sandbox-inner.sb");
+            p.is_file().then(|| fs::read_to_string(p).unwrap())
+        })
+        .expect("inner sb profile");
+    assert!(profile.contains("(deny network*)"), "{profile}");
+}
+
 /// LEARNINGS.md: a `## lifetime` header aggregates ALL runs — long-lived
 /// stats survive the bounded tail window injected into dispatches.
 #[test]

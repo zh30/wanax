@@ -22,6 +22,18 @@ impl SandboxBackend {
     }
 }
 
+/// Network egress confinement layered on the filesystem rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetConfine {
+    /// No network rule (previous behavior).
+    Open,
+    /// Outbound allowed only to `localhost:port` — children must use the
+    /// domain-allowlist proxy; nothing else leaves the box, DNS included.
+    ProxyOnly(u16),
+    /// No network at all.
+    Isolated,
+}
+
 /// Resolved per-spawn confinement: writable roots, hidden read paths, and the
 /// chosen backend. `writable` must include the worktree and the real git dir
 /// (linked worktrees write metadata under `<repo>/.git/worktrees/`).
@@ -30,6 +42,7 @@ pub struct SandboxSpec {
     pub backend: SandboxBackend,
     pub writable: Vec<PathBuf>,
     pub deny_read: Vec<PathBuf>,
+    pub net: NetConfine,
     pub seatbelt_profile: Option<PathBuf>,
 }
 
@@ -39,6 +52,7 @@ impl SandboxSpec {
             backend: SandboxBackend::None,
             writable: Vec::new(),
             deny_read: Vec::new(),
+            net: NetConfine::Open,
             seatbelt_profile: None,
         }
     }
@@ -121,6 +135,7 @@ pub fn resolve(
     writable_required: Vec<PathBuf>,
     extra_writes: &[String],
     profile_path: Option<PathBuf>,
+    net: NetConfine,
 ) -> Result<SandboxSpec, WanaxError> {
     let backend = detect_backend(mode);
     if backend == SandboxBackend::None {
@@ -166,6 +181,7 @@ pub fn resolve(
         backend,
         writable,
         deny_read,
+        net,
         seatbelt_profile: profile_path.clone(),
     };
     if backend == SandboxBackend::Seatbelt {
@@ -203,6 +219,20 @@ pub fn seatbelt_profile_text(spec: &SandboxSpec) -> String {
         s.push_str(&format!("    ({rule} \"{}\")\n", seatbelt_escape(p)));
     }
     s.push_str(")\n");
+    match spec.net {
+        NetConfine::Open => {}
+        NetConfine::ProxyOnly(port) => {
+            // Only the local allowlist proxy may be reached — outbound DNS,
+            // HTTPS to arbitrary hosts, everything else is dead.
+            s.push_str("(deny network-outbound)\n");
+            s.push_str(&format!(
+                "(allow network-outbound (remote tcp \"localhost:{port}\"))\n"
+            ));
+        }
+        NetConfine::Isolated => {
+            s.push_str("(deny network*)\n");
+        }
+    }
     s
 }
 
@@ -253,6 +283,9 @@ pub fn wrap(
                 "/".into(),
                 "/".into(),
             ];
+            if spec.net == NetConfine::Isolated {
+                argv.push("--unshare-net".into());
+            }
             for p in &spec.writable {
                 if p.exists() {
                     argv.push("--bind".into());
@@ -278,7 +311,7 @@ mod tests {
 
     #[test]
     fn off_mode_resolves_to_none() {
-        let spec = resolve("off", vec![PathBuf::from("/x")], &[], None).unwrap();
+        let spec = resolve("off", vec![PathBuf::from("/x")], &[], None, NetConfine::Open).unwrap();
         assert_eq!(spec.backend, SandboxBackend::None);
         let (prog, argv) = wrap(&spec, Path::new("/bin/echo"), &["hi".into()]).unwrap();
         assert_eq!(prog, PathBuf::from("/bin/echo"));
@@ -291,6 +324,7 @@ mod tests {
             backend: SandboxBackend::Seatbelt,
             writable: vec![PathBuf::from("/repo/.wt"), PathBuf::from("/repo/.git")],
             deny_read: vec![PathBuf::from("/u/.ssh")],
+            net: NetConfine::Open,
             seatbelt_profile: Some(PathBuf::from("/tmp/p.sb")),
         };
         let text = seatbelt_profile_text(&spec);
@@ -311,6 +345,7 @@ mod tests {
             backend: SandboxBackend::Seatbelt,
             writable: vec![file.clone()],
             deny_read: vec![],
+            net: NetConfine::Open,
             seatbelt_profile: Some(dir.path().join("p.sb")),
         };
         let text = seatbelt_profile_text(&spec);
@@ -321,11 +356,34 @@ mod tests {
     }
 
     #[test]
+    fn seatbelt_net_rules_proxy_only_and_isolated() {
+        let base = |net| SandboxSpec {
+            backend: SandboxBackend::Seatbelt,
+            writable: vec![],
+            deny_read: vec![],
+            net,
+            seatbelt_profile: Some(PathBuf::from("/tmp/p.sb")),
+        };
+        let proxied = seatbelt_profile_text(&base(NetConfine::ProxyOnly(4321)));
+        let deny = proxied.find("(deny network-outbound)").unwrap();
+        let allow = proxied
+            .find("(allow network-outbound (remote tcp \"localhost:4321\"))")
+            .unwrap();
+        assert!(deny < allow, "deny must precede the localhost allow");
+
+        let isolated = seatbelt_profile_text(&base(NetConfine::Isolated));
+        assert!(isolated.contains("(deny network*)"));
+        let open = seatbelt_profile_text(&base(NetConfine::Open));
+        assert!(!open.contains("network"));
+    }
+
+    #[test]
     fn seatbelt_wrap_prefixes_argv() {
         let spec = SandboxSpec {
             backend: SandboxBackend::Seatbelt,
             writable: vec![],
             deny_read: vec![],
+            net: NetConfine::Open,
             seatbelt_profile: Some(PathBuf::from("/tmp/p.sb")),
         };
         let (prog, argv) = wrap(&spec, Path::new("/usr/bin/claude"), &["-p".into()]).unwrap();

@@ -731,11 +731,12 @@ async fn run_factory(
     logging::init_run_log(&run_dir(repo, &run.id).join("wanax.log")).ok();
 
     let gitconfig = prepare_worker_gitconfig(repo)?;
-    let test_env = test_child_env(cfg, &gitconfig);
-    let inner_sandbox = sandbox_for(cfg, repo, &run.id, &inner_wt, "inner")?;
+    let egress = build_egress(cfg).await?;
+    let test_env = test_child_env(cfg, &gitconfig, egress.proxy_url.as_deref());
+    let inner_sandbox = sandbox_for(cfg, repo, &run.id, &inner_wt, "inner", egress.net)?;
 
     let mut started_payload =
-        json!({ "base_sha": base_sha, "sandbox": inner_sandbox.backend.as_str(), "adapter": adapter_kind.as_str(), "contract_path": contract.path });
+        json!({ "base_sha": base_sha, "sandbox": inner_sandbox.backend.as_str(), "adapter": adapter_kind.as_str(), "contract_path": contract.path, "egress": egress.label() });
     if let Some(r) = rsi {
         started_payload["iteration"] = json!(r.iteration);
         if let Some(p) = &r.parent_run_id {
@@ -815,6 +816,8 @@ async fn run_factory(
         inner_sandbox,
         baseline_exit,
         rsi_notes: rsi.and_then(|r| r.notes.clone()),
+        net: egress.net,
+        proxy_url: egress.proxy_url.clone(),
     })
     .await;
     // Persistent factory memory: one distilled line per run, so future
@@ -852,8 +855,9 @@ async fn continue_factory(
     copy_fake_specs(repo, &inner_wt);
     logging::init_run_log(&run_dir(repo, &run.id).join("wanax.log")).ok();
     let gitconfig = prepare_worker_gitconfig(repo)?;
-    let test_env = test_child_env(cfg, &gitconfig);
-    let inner_sandbox = sandbox_for(cfg, repo, &run.id, &inner_wt, "inner")?;
+    let egress = build_egress(cfg).await?;
+    let test_env = test_child_env(cfg, &gitconfig, egress.proxy_url.as_deref());
+    let inner_sandbox = sandbox_for(cfg, repo, &run.id, &inner_wt, "inner", egress.net)?;
     let baseline_exit = baseline_exit_from_envelope(repo, &run.id);
     let _ = append_event(
         repo,
@@ -979,6 +983,8 @@ async fn continue_factory(
         inner_sandbox,
         baseline_exit,
         rsi_notes: None,
+        net: egress.net,
+        proxy_url: egress.proxy_url.clone(),
     })
     .await;
     append_learning(repo, &run_id, &learn_label);
@@ -1005,6 +1011,8 @@ struct DriveParams<'a> {
     inner_sandbox: SandboxSpec,
     baseline_exit: Option<i32>,
     rsi_notes: Option<String>,
+    net: wanax_core::sandbox::NetConfine,
+    proxy_url: Option<String>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1029,6 +1037,8 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
         inner_sandbox,
         baseline_exit,
         rsi_notes,
+        net,
+        proxy_url,
     } = params;
     let commander: Box<dyn Commander> = pick_commander(cfg)?;
     let review_client = pick_review_client(cfg);
@@ -1101,6 +1111,8 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     gitconfig: &gitconfig,
                     test_env: &test_env,
                     inner_sandbox: &inner_sandbox,
+                proxy_url: proxy_url.as_deref(),
+                net,
                 })
                 .await
             } else {
@@ -1126,6 +1138,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                         gitconfig: &gitconfig,
                         test_env: &test_env,
                         inner_sandbox: &inner_sandbox,
+                    proxy_url: proxy_url.as_deref(),
                     })
                     .await
                 }
@@ -1170,6 +1183,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 gitconfig: &gitconfig,
                 test_env: &test_env,
                 inner_sandbox: &inner_sandbox,
+                proxy_url: proxy_url.as_deref(),
             })
             .await
         } else {
@@ -1229,6 +1243,8 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                         gitconfig: &gitconfig,
                         test_env: &test_env,
                         inner_sandbox: &inner_sandbox,
+                    proxy_url: proxy_url.as_deref(),
+                    net,
                     })
                     .await
                 }
@@ -1258,6 +1274,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                         gitconfig: &gitconfig,
                         test_env: &test_env,
                         inner_sandbox: &inner_sandbox,
+                    proxy_url: proxy_url.as_deref(),
                     })
                     .await
                 }
@@ -1353,6 +1370,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             &run.id,
             &outer_wt,
             &format!("outer-{outer_n}"),
+            net,
         )?;
         let test = run_test_command(
             &outer_wt,
@@ -1861,6 +1879,7 @@ struct InnerSingleParams<'a> {
     gitconfig: &'a Path,
     test_env: &'a HashMap<String, String>,
     inner_sandbox: &'a SandboxSpec,
+    proxy_url: Option<&'a str>,
 }
 
 struct PeerBatchParams<'a> {
@@ -1880,6 +1899,8 @@ struct PeerBatchParams<'a> {
     gitconfig: &'a Path,
     test_env: &'a HashMap<String, String>,
     inner_sandbox: &'a SandboxSpec,
+    proxy_url: Option<&'a str>,
+    net: wanax_core::sandbox::NetConfine,
 }
 
 async fn run_single_unit(params: InnerSingleParams<'_>) -> Result<InnerPhaseResult, WanaxError> {
@@ -1899,6 +1920,7 @@ async fn run_single_unit(params: InnerSingleParams<'_>) -> Result<InnerPhaseResu
         gitconfig,
         test_env,
         inner_sandbox,
+        proxy_url,
     } = params;
     let u = match unit {
         Some(existing) => {
@@ -1990,6 +2012,7 @@ async fn run_single_unit(params: InnerSingleParams<'_>) -> Result<InnerPhaseResu
         gitconfig,
         test_env,
         inner_sandbox,
+        proxy_url,
     })
     .await?;
 
@@ -2025,6 +2048,8 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
         gitconfig,
         test_env,
         inner_sandbox,
+        proxy_url,
+        net,
     } = params;
     if peers.len() < 2 {
         return Err(WanaxError::from_code(ErrorCode::CommanderSchema));
@@ -2187,7 +2212,14 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
         fs::write(peer_wt.join("WORK_UNIT.md"), &peer.instruction)
             .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
 
-        let peer_spec = sandbox_for(cfg, repo, &run.id, &peer_wt, &format!("peer-{seq}"))?;
+        let peer_spec = sandbox_for(
+            cfg,
+            repo,
+            &run.id,
+            &peer_wt,
+            &format!("peer-{seq}"),
+            net,
+        )?;
         let ctx = WorkerContext {
             run_id: run.id.clone(),
             work_unit_id: peer_unit.id.clone(),
@@ -2200,6 +2232,7 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
             timeout_secs: cfg.file.worker.timeout_secs,
             gitconfig: Some(gitconfig.to_path_buf()),
             sandbox: Some(peer_spec),
+            proxy_url: proxy_url.map(String::from),
         };
         let spec_path = peer_wt.join(".wanax").join("fake.toml");
         let pr = PeerRun {
@@ -2536,6 +2569,7 @@ struct GoalLoopParams<'a> {
     gitconfig: &'a Path,
     test_env: &'a HashMap<String, String>,
     inner_sandbox: &'a SandboxSpec,
+    proxy_url: Option<&'a str>,
 }
 
 async fn run_goal_loop(
@@ -2556,6 +2590,7 @@ async fn run_goal_loop(
         gitconfig,
         test_env,
         inner_sandbox,
+        proxy_url,
     } = params;
     let ctx = WorkerContext {
         run_id: run.id.clone(),
@@ -2569,6 +2604,7 @@ async fn run_goal_loop(
         timeout_secs: cfg.file.worker.timeout_secs,
         gitconfig: Some(gitconfig.to_path_buf()),
         sandbox: Some(inner_sandbox.clone()),
+        proxy_url: proxy_url.map(String::from),
     };
     let mut last_handle = None;
     let mut prev_paths: Option<Vec<String>> = None;
@@ -2766,11 +2802,92 @@ fn preflight_adapter(adapter_kind: WorkerAdapterKind, cfg: &ResolvedConfig) -> R
 
 /// Environment for spawned test harnesses: whitelist base + contract-declared
 /// pass_env + the wanax-managed git config (never the wanax process env).
-fn test_child_env(cfg: &ResolvedConfig, gitconfig: &Path) -> HashMap<String, String> {
+fn test_child_env(
+    cfg: &ResolvedConfig,
+    gitconfig: &Path,
+    proxy_url: Option<&str>,
+) -> HashMap<String, String> {
     let mut env = envenv::base_child_env();
     envenv::with_passthrough(&mut env, &cfg.file.test.pass_env);
     envenv::with_git_config(&mut env, gitconfig);
+    if let Some(url) = proxy_url {
+        for (k, v) in wanax_core::egress::proxy_env_from_url(url) {
+            env.insert(k, v);
+        }
+    }
     env
+}
+
+/// Resolved egress confinement for one run: the allowlist proxy stays alive
+/// as long as `proxy` is held — drop aborts its task.
+struct EgressPlan {
+    mode: wanax_core::egress::EgressMode,
+    net: wanax_core::sandbox::NetConfine,
+    proxy_url: Option<String>,
+    n_hosts: usize,
+    _proxy: Option<wanax_core::egress::EgressProxy>,
+}
+
+impl EgressPlan {
+    fn label(&self) -> String {
+        match self.mode {
+            wanax_core::egress::EgressMode::Allowlist => {
+                format!("allowlist:{}", self.n_hosts)
+            }
+            m => m.as_str().to_string(),
+        }
+    }
+}
+
+/// `[worker] egress` → proxy + env + sandbox net rule. The allowlist unions
+/// `egress_allow` with the provider base_url hosts so a worker can always
+/// reach its own API — and nothing else.
+async fn build_egress(cfg: &ResolvedConfig) -> Result<EgressPlan, WanaxError> {
+    use wanax_core::egress::{EgressAllowlist, EgressMode, EgressProxy};
+    use wanax_core::sandbox::NetConfine;
+    let mode = EgressMode::parse(&cfg.file.worker.egress);
+    match mode {
+        EgressMode::Off => Ok(EgressPlan {
+            mode,
+            net: NetConfine::Open,
+            proxy_url: None,
+            n_hosts: 0,
+            _proxy: None,
+        }),
+        EgressMode::Isolated => Ok(EgressPlan {
+            mode,
+            net: NetConfine::Isolated,
+            proxy_url: None,
+            n_hosts: 0,
+            _proxy: None,
+        }),
+        EgressMode::Allowlist => {
+            let mut hosts = cfg.file.worker.egress_allow.clone();
+            for base in [&cfg.file.commander.base_url, &cfg.file.inner.base_url]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(h) = wanax_core::egress::host_of_base_url(base) {
+                    hosts.push(h);
+                }
+            }
+            let allow = EgressAllowlist::new(hosts);
+            let proxy = EgressProxy::start(
+                allow.clone(),
+                std::sync::Arc::new(|m| tracing::warn!("{m}")),
+            )
+            .await
+            .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
+            let port = proxy.port;
+            Ok(EgressPlan {
+                mode,
+                net: NetConfine::ProxyOnly(port),
+                proxy_url: Some(format!("http://127.0.0.1:{port}")),
+                n_hosts: allow.len(),
+                _proxy: Some(proxy),
+            })
+        }
+    }
 }
 
 /// Confinement spec for one spawned role (inner worker, peer, outer retest,
@@ -2782,6 +2899,7 @@ fn sandbox_for(
     run_id: &str,
     worktree: &Path,
     role: &str,
+    net: wanax_core::sandbox::NetConfine,
 ) -> Result<SandboxSpec, WanaxError> {
     let rd = run_dir(repo, run_id);
     let git_dir = git_common_dir(repo).unwrap_or_else(|_| repo.join(".git"));
@@ -2790,6 +2908,7 @@ fn sandbox_for(
         vec![worktree.to_path_buf(), git_dir, rd.clone()],
         &cfg.file.sandbox.extra_write_paths,
         Some(rd.join(format!("sandbox-{role}.sb"))),
+        net,
     )
 }
 

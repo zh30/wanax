@@ -25,6 +25,9 @@ pub struct WorkerContext {
     pub timeout_secs: u32,
     pub gitconfig: Option<PathBuf>,
     pub sandbox: Option<SandboxSpec>,
+    /// `http://127.0.0.1:port` when worker egress is confined to the
+    /// allowlist proxy.
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +77,11 @@ pub fn sanitized_env(ctx: &WorkerContext) -> HashMap<String, String> {
     env.insert("WANAX_RUN_ID".into(), ctx.run_id.clone());
     env.insert("WANAX_WORK_UNIT_ID".into(), ctx.work_unit_id.clone());
     env.insert("WANAX_TEST_COMMAND".into(), ctx.test_command.clone());
+    if let Some(p) = &ctx.proxy_url {
+        for (k, v) in wanax_core::egress::proxy_env_from_url(p) {
+            env.insert(k, v);
+        }
+    }
     for k in FORBIDDEN_ENV {
         env.remove(*k);
     }
@@ -900,6 +908,7 @@ mod tests {
             timeout_secs: 30,
             gitconfig: None,
             sandbox: None,
+            proxy_url: None,
         };
         let env = sanitized_env(&ctx);
         assert!(!env_has_forbidden(&env));
@@ -945,6 +954,7 @@ mod tests {
             timeout_secs: 10,
             gitconfig: None,
             sandbox: None,
+            proxy_url: None,
         };
         adapter.start(&ctx).await.unwrap();
         assert_eq!(
@@ -980,6 +990,7 @@ mod tests {
             timeout_secs: 1,
             gitconfig: None,
             sandbox: None,
+            proxy_url: None,
         };
         let err = adapter.start(&ctx).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::WorkerTimeout);
@@ -998,6 +1009,7 @@ mod tests {
             timeout_secs: 10,
             gitconfig: None,
             sandbox: None,
+            proxy_url: None,
         }
     }
 
@@ -1115,6 +1127,7 @@ mod tests {
             vec![wt.clone()],
             &[],
             Some(dir.path().join("sandbox.sb")),
+            wanax_core::sandbox::NetConfine::Open,
         )
         .unwrap();
         let adapter = CmdAdapter::new(script.display().to_string(), Vec::new());

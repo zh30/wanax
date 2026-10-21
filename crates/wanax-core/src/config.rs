@@ -103,6 +103,14 @@ pub struct WorkerConfig {
     pub codex_args: Vec<String>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u32,
+    /// Egress confinement for worker/test children: off | allowlist | isolated.
+    #[serde(default = "default_egress")]
+    pub egress: String,
+    /// Domains the egress proxy may reach when egress = "allowlist"
+    /// (exact or "*.suffix"). Provider base_url hosts are added
+    /// automatically.
+    #[serde(default)]
+    pub egress_allow: Vec<String>,
 }
 
 impl Default for WorkerConfig {
@@ -117,6 +125,8 @@ impl Default for WorkerConfig {
             codex_bin: default_codex_bin(),
             codex_args: Vec::new(),
             timeout_secs: default_timeout(),
+            egress: default_egress(),
+            egress_allow: Vec::new(),
         }
     }
 }
@@ -270,6 +280,10 @@ impl Default for SandboxConfig {
     }
 }
 
+fn default_egress() -> String {
+    "off".into()
+}
+
 fn default_provider() -> String {
     "openai_compat".into()
 }
@@ -389,6 +403,12 @@ impl ResolvedConfig {
                 "invalid worker.timeout_secs",
             ));
         }
+        if !matches!(file.worker.egress.trim(), "off" | "allowlist" | "isolated") {
+            return Err(WanaxError::new(
+                ErrorCode::ContractInvalid,
+                "invalid worker.egress",
+            ));
+        }
         let adapter = WorkerAdapterKind::parse(&file.worker.adapter).ok_or_else(|| {
             WanaxError::new(
                 ErrorCode::AdapterMissing,
@@ -447,6 +467,9 @@ octoscode_bin = "octoscode"
 claude_bin = "claude"
 codex_bin = "codex"
 timeout_secs = 1800
+# egress = "allowlist"  # off | allowlist | isolated — confine worker/test network
+# egress_allow = []     # domains the proxy may reach ("*.github.com"); provider
+                        # base_url hosts are added automatically
 
 [budget]
 max_usd = "5.00"

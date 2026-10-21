@@ -172,6 +172,11 @@ claude_bin = "claude"
 codex_bin = "codex"
 # cmd = "my-agent"       # PATH name or absolute path when adapter = "cmd"
 # cmd_args = []          # optional; instruction is WANAX_INSTRUCTION, not argv
+# egress = "allowlist"   # off | allowlist | isolated — worker/test children get
+                        # HTTP(S)_PROXY → a local CONNECT proxy that tunnels
+                        # only whitelisted domains; seatbelt also confines
+                        # outbound to localhost:proxy (bypass-proof, DNS too)
+# egress_allow = ["api.anthropic.com", "*.github.com"]
 
 [lock]
 repo_exclusive = true   # false → path-set lock on allowed_globs; disjoint runs may overlap in time

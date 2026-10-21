@@ -46,6 +46,9 @@ impl CliCommander {
             vec![scratch.clone()],
             &cfg.file.sandbox.extra_write_paths,
             Some(scratch.join("commander.sb")),
+            // The commander is a configured component; egress confinement
+            // targets the untrusted worker/test children.
+            sandbox::NetConfine::Open,
         )?;
         Ok(Self {
             bin: resolve_bin(&name)?,
