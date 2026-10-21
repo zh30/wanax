@@ -2756,7 +2756,7 @@ async fn start_adapter(
     }
 }
 
-fn preflight_adapter(adapter_kind: WorkerAdapterKind, cfg: &ResolvedConfig) -> Result<(), WanaxError> {
+pub(crate) fn preflight_adapter(adapter_kind: WorkerAdapterKind, cfg: &ResolvedConfig) -> Result<(), WanaxError> {
     if !adapter_kind.is_supported() {
         return Err(WanaxError::new(
             ErrorCode::AdapterMissing,

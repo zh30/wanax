@@ -1981,6 +1981,49 @@ fn egress_isolated_denies_all_network() {
     assert!(profile.contains("(deny network*)"), "{profile}");
 }
 
+/// `wanax check`: a sound contract passes; a contract that names a missing
+/// bound_test fails with exit != 0 (it could never be accepted).
+#[test]
+fn check_reports_contract_health() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    let out = h.run(&["check", "--contract", "specs/add.contract.md", "--adapter", "fake"], 0);
+    assert!(out.stdout.contains("result: PASS"), "{}", out.stdout);
+}
+
+#[test]
+fn check_fails_when_bound_test_missing() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let c = contract("src/**").replace(
+        "cargo test exits 0",
+        "cargo test exits 0\n- CC-02: never green (bound_test: `definitely_missing_test`)",
+    );
+    h.write_contract(&c);
+    let out = h.run(&["check", "--contract", "specs/add.contract.md", "--adapter", "fake"], 4);
+    assert!(
+        out.stdout.contains("definitely_missing_test")
+            && out.stdout.contains("not in `cargo test -- --list`"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+}
+
+#[test]
+fn check_warns_when_allowed_globs_cover_tests() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("tests/**"));
+    let out = h.run(&["check", "--contract", "specs/add.contract.md", "--adapter", "fake"], 0);
+    assert!(
+        out.stdout.contains("vacuous") || out.stdout.contains("binding tests"),
+        "{}",
+        out.stdout
+    );
+}
+
 /// LEARNINGS.md: a `## lifetime` header aggregates ALL runs — long-lived
 /// stats survive the bounded tail window injected into dispatches.
 #[test]

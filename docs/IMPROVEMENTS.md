@@ -175,6 +175,7 @@ extra_write_paths = []   # 额外可写目录（用户工具链缓存等）
 | R-20 | 契约趋势序列 | `report` 每契约输出时序终态 `[AEFFA]`——收敛方向一眼可见 | ✅ 已实现+测试 |
 | R-21 | 事件溯源 resume | `unit_seeded`/`unit_dispatched`/`receipt_submitted`/`verdict` 携带重建所需全部字段；resume 以 envelope 重放为准，DB 行缺失/分歧时自愈并记 WARN。旧 envelope 缺字段 → 自动回退 DB 路径 | ✅ 已实现+测试 |
 | R-22 | egress 白名单代理 | `[worker] egress = "allowlist"`：worker/test 子进程注入 HTTP(S)_PROXY → 本地 CONNECT 代理只放行白名单域名（base_url host 自动并入），Seatbelt 再 `deny network-outbound` 只留 `localhost:proxy`——绕过代理的直连连 DNS 都不通。`"isolated"` = 完全断网（bwrap 用 `--unshare-net`）。补齐文件沙箱之外的最后一层 | ✅ 已实现+测试 |
+| R-23 | `wanax check` 契约预检 | 机械预检再进 run：bound_test 名字对照 `cargo test -- --list`（缺失 → FAIL exit 4）、allowed_globs 匹配 0 文件/覆盖 tests/ → WARN、test_command 二进制存在性、adapter preflight、egress 空白名单 → FAIL/WARN。把 dogfood 中反复踩到的契约坑左移到 run 之前 | ✅ 已实现+测试 |
 
 **RSI 不变量**：
 - 契约 sha256 冻结规则不变——跨迭代变化的只有 evidence/notes，它们走 `DispatchContext.rsi_notes`，不进契约文件

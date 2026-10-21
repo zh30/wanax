@@ -300,6 +300,7 @@ wanax clean --include-dead       # also reclaim crash-orphan runs (non-terminal,
 | `wanax verdict <run_id>` | Print the last outer verdict |
 | `wanax report [run_id]` | Fitness view: state, verdicts, baseline/outer exits, errors, cost, wall time |
 | `wanax improve --contract <path> [--iterations N]` | RSI loop: rerun with evidence carried across iterations |
+| `wanax check --contract <path>` | Mechanical contract preflight: bound_test names vs `cargo test -- --list`, glob coverage, vacuous-green traps, adapter availability. Exit 4 on FAIL |
 | `wanax clean [--dry-run] [--runs] [--include-accepted]` | Remove finished-run worktrees and branches |
 | `wanax doctor [--strict] [--fix-lock]` | Git, adapter, keys (presence only), stale lock, sandbox, disk |
 

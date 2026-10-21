@@ -1,3 +1,4 @@
+mod check;
 mod clean;
 mod doctor;
 mod engine;
@@ -124,6 +125,14 @@ enum Commands {
         #[arg(long)]
         suggest: bool,
     },
+    /// Mechanical contract preflight: glob coverage, bound_test existence,
+    /// vacuous-green traps, adapter availability. Exits non-zero on FAIL.
+    Check {
+        #[arg(long)]
+        contract: PathBuf,
+        #[arg(long)]
+        adapter: Option<AdapterArg>,
+    },
     /// Remove worktrees/branches left by finished runs. Accepted runs are
     /// kept unless --include-accepted; tombstones kept unless --runs.
     Clean {
@@ -216,6 +225,14 @@ async fn run() -> Result<(), WanaxError> {
                 from,
                 adapters: adapters.into_iter().map(Into::into).collect(),
                 max_total_usd_micros,
+            })
+            .await
+        }
+        Commands::Check { contract, adapter } => {
+            check::run(check::CheckOpts {
+                contract,
+                adapter: adapter.map(Into::into),
+                data_dir,
             })
             .await
         }
