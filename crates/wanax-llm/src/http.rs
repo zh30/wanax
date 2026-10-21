@@ -56,6 +56,7 @@ impl HttpCommander {
             completion_tokens: completion.completion_tokens,
             raw_json,
             usd_micros: None,
+            prompt_in: Some(format!("=== system ===\n{system}\n=== user ===\n{user}")),
         }
     }
 }

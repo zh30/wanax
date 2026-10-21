@@ -77,6 +77,7 @@ Do not accept, merge, or claim outer verdict. Do not write files.";
                 completion_tokens: completion.completion_tokens,
                 raw_json: completion.text,
                 usd_micros: None,
+                prompt_in: Some(format!("=== system ===\n{system}\n=== user ===\n{user}")),
             }),
         },
         Err(_) => mechanical_self_review(changed, test_exit_code),
