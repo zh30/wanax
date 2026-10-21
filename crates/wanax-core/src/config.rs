@@ -128,6 +128,11 @@ pub struct WorkerConfig {
     /// automatically.
     #[serde(default)]
     pub egress_allow: Vec<String>,
+    /// Extra env keys copied into the worker child (agent CLIs that carry
+    /// their own credentials, e.g. `["OPENROUTER_API_KEY"]`). FORBIDDEN_ENV
+    /// names still lose — wanax's own keys can never leak this way.
+    #[serde(default)]
+    pub pass_env: Vec<String>,
 }
 
 impl Default for WorkerConfig {
@@ -146,6 +151,7 @@ impl Default for WorkerConfig {
             timeout_secs: default_timeout(),
             egress: default_egress(),
             egress_allow: Vec::new(),
+            pass_env: Vec::new(),
         }
     }
 }

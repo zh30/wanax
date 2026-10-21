@@ -1867,6 +1867,51 @@ fn bound_test_blocks_vacuous_accept() {
     );
 }
 
+/// [worker] pass_env copies allowed keys into the worker child — agent
+/// CLIs can carry their own credentials — while FORBIDDEN_ENV names
+/// (WANAX_*_API_KEY etc.) still lose unconditionally.
+#[test]
+fn worker_pass_env_allows_keys_and_still_blocks_forbidden() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t = t.replace(
+        "adapter = \"fake\"",
+        "adapter = \"cmd\"\ncmd = \"sh\"\ncmd_args = [\"-c\", \"printf %s $MY_AGENT_KEY > src/env.proof; printf %s ${WANAX_INNER_API_KEY:-EMPTY} >> src/env.proof; printf 'pub fn z() -> i32 { 9 }\\n' > src/lib.rs\"]\npass_env = [\"MY_AGENT_KEY\", \"WANAX_INNER_API_KEY\"]",
+    );
+    fs::write(&p, t).unwrap();
+    h.write_contract(&contract("src/**"));
+    // The passthrough key lives in the parent env; WANAX_INNER_API_KEY too,
+    // to prove forbidden always wins over pass_env.
+    std::env::set_var("MY_AGENT_KEY", "sekrit");
+    std::env::set_var("WANAX_INNER_API_KEY", "must-not-leak");
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "cmd",
+        ],
+        0,
+    );
+    std::env::remove_var("MY_AGENT_KEY");
+    std::env::remove_var("WANAX_INNER_API_KEY");
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+    // The proof lands inside the worktree (src/ is allowed) and ends up on
+    // the inner branch like any other artifact.
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    let proof = Command::new("git")
+        .args(["-C", &h.path().display().to_string(), "show",
+               &format!("wanax/{run_id}/inner:src/env.proof")])
+        .output()
+        .expect("git show");
+    let proof = String::from_utf8_lossy(&proof.stdout).into_owned();
+    assert!(proof.starts_with("sekrit"), "proof={proof}");
+    assert!(proof.ends_with("EMPTY"), "proof={proof}");
+}
+
 /// `status --json` emits machine-readable run detail; `doctor` resolves
 /// the acp adapter binary instead of falling through to octoscode.
 #[test]

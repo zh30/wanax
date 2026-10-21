@@ -30,6 +30,10 @@ pub struct WorkerContext {
     /// `http://127.0.0.1:port` when worker egress is confined to the
     /// allowlist proxy.
     pub proxy_url: Option<String>,
+    /// Config-declared env keys copied from the parent (`[worker] pass_env`)
+    /// — the channel for agent CLIs carrying their own credentials.
+    /// `envenv::with_passthrough` still refuses FORBIDDEN_ENV names.
+    pub pass_env: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +83,7 @@ pub fn sanitized_env(ctx: &WorkerContext) -> HashMap<String, String> {
     env.insert("WANAX_RUN_ID".into(), ctx.run_id.clone());
     env.insert("WANAX_WORK_UNIT_ID".into(), ctx.work_unit_id.clone());
     env.insert("WANAX_TEST_COMMAND".into(), ctx.test_command.clone());
+    envenv::with_passthrough(&mut env, &ctx.pass_env);
     if let Some(p) = &ctx.proxy_url {
         for (k, v) in wanax_core::egress::proxy_env_from_url(p) {
             env.insert(k, v);
@@ -933,6 +938,7 @@ mod tests {
             instruction: "do".into(),
             adapter_name: "fake".into(),
             extra_path: None,
+            pass_env: Vec::new(),
             timeout_secs: 30,
             gitconfig: None,
             sandbox: None,
@@ -947,6 +953,40 @@ mod tests {
         assert!(!env.contains_key("GH_TOKEN"));
         assert!(!env.contains_key("SSH_AUTH_SOCK"));
         assert!(!env.contains_key("GIT_ASKPASS"));
+    }
+
+    /// pass_env opens a deliberate channel for agent CLIs' own credentials,
+    /// while FORBIDDEN_ENV names (wanax's own keys) still lose.
+    #[test]
+    fn sanitized_env_pass_env_allows_and_forbidden_still_wins() {
+        std::env::set_var("WANAX_TEST_AGENT_CREDS", "pok");
+        std::env::set_var("WANAX_INNER_API_KEY", "nope");
+        let ctx = WorkerContext {
+            run_id: "wx_01AAAAAAAAAAAAAAAAAAAAAAAA".into(),
+            work_unit_id: "wx_01BBBBBBBBBBBBBBBBBBBBBBBB".into(),
+            test_command: "cargo test".into(),
+            test_timeout_secs: 30,
+            worktree: PathBuf::from("/tmp"),
+            instruction: "do".into(),
+            adapter_name: "fake".into(),
+            extra_path: None,
+            pass_env: vec![
+                "WANAX_TEST_AGENT_CREDS".to_string(),
+                "WANAX_INNER_API_KEY".to_string(),
+            ],
+            timeout_secs: 30,
+            gitconfig: None,
+            sandbox: None,
+            proxy_url: None,
+        };
+        let env = sanitized_env(&ctx);
+        assert_eq!(
+            env.get("WANAX_TEST_AGENT_CREDS").map(String::as_str),
+            Some("pok")
+        );
+        assert!(!env.contains_key("WANAX_INNER_API_KEY"));
+        std::env::remove_var("WANAX_TEST_AGENT_CREDS");
+        std::env::remove_var("WANAX_INNER_API_KEY");
     }
 
     #[test]
@@ -979,6 +1019,7 @@ mod tests {
             instruction: "implement add without leaking".into(),
             adapter_name: "cmd".into(),
             extra_path: None,
+            pass_env: Vec::new(),
             timeout_secs: 10,
             gitconfig: None,
             sandbox: None,
@@ -1015,6 +1056,7 @@ mod tests {
             instruction: "sleep".into(),
             adapter_name: "cmd".into(),
             extra_path: None,
+            pass_env: Vec::new(),
             timeout_secs: 1,
             gitconfig: None,
             sandbox: None,
@@ -1034,6 +1076,7 @@ mod tests {
             instruction: instruction.into(),
             adapter_name: "claude".into(),
             extra_path: None,
+            pass_env: Vec::new(),
             timeout_secs: 10,
             gitconfig: None,
             sandbox: None,
