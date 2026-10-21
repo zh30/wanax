@@ -2387,7 +2387,7 @@ fn check_reports_contract_health() {
 }
 
 #[test]
-fn check_fails_when_bound_test_missing() {
+fn check_warns_when_bound_test_missing() {
     let h = Harness::new();
     h.set_adapter_fake();
     let c = contract("src/**").replace(
@@ -2395,10 +2395,12 @@ fn check_fails_when_bound_test_missing() {
         "cargo test exits 0\n- CC-02: never green (bound_test: `definitely_missing_test`)",
     );
     h.write_contract(&c);
-    let out = h.run(&["check", "--contract", "specs/add.contract.md", "--adapter", "fake"], 4);
+    // WARN not FAIL: "the work is supposed to create the test" is a
+    // legitimate pattern — a typo still fails the outer gate, not the door.
+    let out = h.run(&["check", "--contract", "specs/add.contract.md", "--adapter", "fake"], 0);
     assert!(
         out.stdout.contains("definitely_missing_test")
-            && out.stdout.contains("not in `cargo test -- --list`"),
+            && out.stdout.contains("not yet listed"),
         "stdout={} stderr={}",
         out.stdout,
         out.stderr

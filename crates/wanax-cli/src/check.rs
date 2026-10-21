@@ -205,8 +205,9 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
                     }
                 }
                 for (cid, name) in &missing {
-                    push(Level::Fail, "bound", format!(
-                        "{cid}: bound_test `{name}` not in `cargo test -- --list` — contract can never accept"
+                    push(Level::Warn, "bound", format!(
+                        "{cid}: bound_test `{name}` not yet listed — fine if the work is supposed to create it; \
+                         a typo'd name means the run can never accept"
                     ));
                 }
             }
