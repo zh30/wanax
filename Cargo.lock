@@ -2085,6 +2085,7 @@ version = "1.0.0"
 dependencies = [
  "async-trait",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml",

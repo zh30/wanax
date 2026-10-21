@@ -72,6 +72,17 @@ pub fn charge_estimated(
     )
 }
 
+/// Charge real USD reported by a worker CLI (e.g. Claude `total_cost_usd`).
+pub fn charge_usd_micros(run: &mut FactoryRun, usd_micros: i64) -> BudgetTick {
+    run.spent_usd_micros = run.spent_usd_micros.saturating_add(usd_micros);
+    BudgetTick {
+        spent_usd_micros: run.spent_usd_micros,
+        spent_inner_turns: run.spent_inner_turns,
+        cost_estimated: false,
+        exhausted: is_budget_exhausted(run),
+    }
+}
+
 pub fn add_turns(run: &mut FactoryRun, n: u32) -> BudgetTick {
     run.spent_inner_turns = run.spent_inner_turns.saturating_add(n);
     BudgetTick {

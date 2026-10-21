@@ -28,6 +28,8 @@ pub struct FileConfig {
     pub lock: LockConfig,
     #[serde(default)]
     pub verify: VerifyConfig,
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,12 +200,15 @@ pub struct GitHubConfig {
 pub struct TestConfig {
     #[serde(default = "default_test_cmd")]
     pub default_command: String,
+    #[serde(default)]
+    pub pass_env: Vec<String>,
 }
 
 impl Default for TestConfig {
     fn default() -> Self {
         Self {
             default_command: default_test_cmd(),
+            pass_env: Vec::new(),
         }
     }
 }
@@ -232,6 +237,8 @@ pub struct VerifyConfig {
     pub require_plugins: bool,
     #[serde(default = "default_agent_spec_commands")]
     pub agent_spec_commands: Vec<String>,
+    #[serde(default = "default_true")]
+    pub baseline_test: bool,
 }
 
 impl Default for VerifyConfig {
@@ -241,6 +248,24 @@ impl Default for VerifyConfig {
             agent_spec_bin: default_agent_spec_bin(),
             require_plugins: false,
             agent_spec_commands: default_agent_spec_commands(),
+            baseline_test: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    #[serde(default = "default_sandbox_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub extra_write_paths: Vec<String>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_sandbox_mode(),
+            extra_write_paths: Vec::new(),
         }
     }
 }
@@ -290,6 +315,9 @@ fn default_agent_spec_bin() -> String {
 fn default_agent_spec_commands() -> Vec<String> {
     vec!["lint".into(), "verify".into(), "lifecycle".into()]
 }
+fn default_sandbox_mode() -> String {
+    "auto".into()
+}
 
 pub fn commander_is_cli(provider: &str) -> bool {
     matches!(provider, "claude_cli" | "codex_cli")
@@ -312,7 +340,12 @@ pub fn commander_cli_args(cfg: &CommanderConfig) -> Vec<String> {
         return cfg.cli_args.clone();
     }
     match cfg.provider.as_str() {
-        "claude_cli" => vec!["-p".into(), "--dangerously-skip-permissions".into()],
+        "claude_cli" => vec![
+            "-p".into(),
+            "--dangerously-skip-permissions".into(),
+            "--output-format".into(),
+            "json".into(),
+        ],
         "codex_cli" => vec![
             "exec".into(),
             "--sandbox".into(),
@@ -441,6 +474,11 @@ plugins = []
 agent_spec_bin = "agent-spec"
 require_plugins = false
 agent_spec_commands = ["lint", "verify", "lifecycle"]
+baseline_test = true
+
+[sandbox]
+mode = "auto"            # auto | off | seatbelt | bwrap
+extra_write_paths = []
 "#
     .to_string()
 }
@@ -493,10 +531,12 @@ fn overlay(mut base: FileConfig, over: FileConfig) -> FileConfig {
     base.github = over.github;
     base.test = over.test;
     base.lock = over.lock;
+    base.sandbox = over.sandbox;
     if over.verify.plugins.is_empty()
         && !over.verify.require_plugins
         && over.verify.agent_spec_bin == default_agent_spec_bin()
         && over.verify.agent_spec_commands == default_agent_spec_commands()
+        && over.verify.baseline_test
     {
         // keep global verify when repo still has the init placeholder
     } else {
@@ -631,7 +671,7 @@ mod tests {
         assert_eq!(commander_cli_bin(&claude), "claude");
         assert_eq!(
             commander_cli_args(&claude),
-            vec!["-p", "--dangerously-skip-permissions"]
+            vec!["-p", "--dangerously-skip-permissions", "--output-format", "json"]
         );
         let codex = CommanderConfig {
             provider: "codex_cli".into(),

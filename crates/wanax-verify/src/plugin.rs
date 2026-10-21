@@ -79,12 +79,14 @@ pub fn run_verifier_plugins(
     };
     let mut excerpt = String::new();
     let mut ok = true;
+    let plugin_env = wanax_core::envenv::base_child_env();
     for command in &commands {
         let args = command_args(command, &spec, code_root);
         let out = Command::new(&bin)
             .args(&args)
             .current_dir(code_root)
-            .env("GIT_TERMINAL_PROMPT", "0")
+            .env_clear()
+            .envs(&plugin_env)
             .output()
             .map_err(|e| WanaxError::with_detail(ErrorCode::Plugin, e))?;
         excerpt.push_str(&format!("# {command}\n"));
