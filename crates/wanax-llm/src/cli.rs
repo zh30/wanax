@@ -1,4 +1,4 @@
-use crate::http::{DISPATCH_SYSTEM, VERDICT_SYSTEM};
+use crate::http::{verdict_user, DISPATCH_SYSTEM, VERDICT_SYSTEM};
 use crate::jsonutil::extract_json_object;
 use crate::{
     parse_dispatch_plan, parse_verdict, Commander, DispatchContext, DispatchPlan, LlmUsage,
@@ -10,18 +10,24 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use wanax_core::config::{commander_cli_args, commander_cli_bin, ResolvedConfig};
+use wanax_core::envenv;
 use wanax_core::error::{ErrorCode, WanaxError};
+use wanax_core::sandbox::{self, SandboxSpec};
 
 /// Outer commander that calls a local coding CLI (Claude Code / Codex) for JSON only.
 ///
-/// The process cwd is an isolated scratch directory so a skip-permissions CLI
-/// cannot write the target repo as a side effect.
+/// The process cwd is an isolated scratch directory, the environment is
+/// whitelist-sanitized (no WANAX/GitHub keys, no SSH agent), and — when a
+/// backend is available — the process is confined by the same OS sandbox the
+/// inner worker runs under. "The outer loop does not write code" is enforced
+/// mechanically, not by prompt.
 #[derive(Debug)]
 pub struct CliCommander {
     bin: PathBuf,
     args: Vec<String>,
     model: String,
     scratch: PathBuf,
+    sandbox: SandboxSpec,
 }
 
 impl CliCommander {
@@ -33,25 +39,43 @@ impl CliCommander {
                 "commander cli binary not found",
             ));
         }
+        let scratch = isolated_scratch()?;
+        write_scratch_gitconfig(&scratch)?;
+        let spec = sandbox::resolve(
+            &cfg.file.sandbox.mode,
+            vec![scratch.clone()],
+            &cfg.file.sandbox.extra_write_paths,
+            Some(scratch.join("commander.sb")),
+        )?;
         Ok(Self {
             bin: resolve_bin(&name)?,
             args: commander_cli_args(&cfg.file.commander),
             model: cfg.file.commander.model.clone(),
-            scratch: isolated_scratch()?,
+            scratch,
+            sandbox: spec,
         })
     }
 
     async fn complete(&self, system: &str, user: &str) -> Result<(String, LlmUsage), WanaxError> {
         let prompt = format!("{system}\n\n{user}");
-        let mut cmd = Command::new(&self.bin);
-        cmd.args(&self.args)
+        let (prog, argv) = sandbox::wrap(&self.sandbox, &self.bin, &self.args)?;
+        let mut env = envenv::base_child_env();
+        envenv::with_git_config(&mut env, &self.scratch.join("gitconfig"));
+        env.insert("WANAX_COMMANDER_MODEL".into(), self.model.clone());
+        let mut cmd = Command::new(prog);
+        cmd.args(argv)
             .current_dir(&self.scratch)
-            .env("WANAX_COMMANDER_MODEL", &self.model)
-            .env_remove("GIT_ASKPASS")
+            .env_clear()
+            .envs(&env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.as_std_mut().process_group(0);
+        }
         let mut child = cmd.spawn().map_err(|e| {
             WanaxError::new(
                 ErrorCode::AdapterMissing,
@@ -64,32 +88,91 @@ impl CliCommander {
                 .await
                 .map_err(|e| WanaxError::with_detail(ErrorCode::CommanderSchema, e))?;
         }
-        let out = tokio::time::timeout(
+        let pid = child.id().unwrap_or(0);
+        let out = match tokio::time::timeout(
             std::time::Duration::from_secs(120),
             child.wait_with_output(),
         )
         .await
-        .map_err(|_| WanaxError::from_code(ErrorCode::WorkerTimeout))?
-        .map_err(|e| WanaxError::with_detail(ErrorCode::CommanderSchema, e))?;
+        {
+            Ok(v) => v.map_err(|e| WanaxError::with_detail(ErrorCode::CommanderSchema, e))?,
+            Err(_) => {
+                kill_group(pid);
+                return Err(WanaxError::from_code(ErrorCode::WorkerTimeout));
+            }
+        };
         if !out.status.success() {
+            // CLIs often put the actionable error on stdout, not stderr —
+            // e.g. claude emits its JSON envelope even on failure
+            // ("Not logged in"). Decode it for a clean message; otherwise
+            // dump both streams (truncated).
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            unwrap_cli_json_envelope(&stdout)?;
+            let stderr_tail = tail_8000_str(&out.stderr);
+            let stdout_tail = tail_8000_str(&out.stdout);
             return Err(WanaxError::new(
                 ErrorCode::CommanderSchema,
-                format!(
-                    "commander cli failed: {}",
-                    String::from_utf8_lossy(&out.stderr)
-                ),
+                format!("commander cli failed: {stderr_tail}{stdout_tail}"),
             ));
         }
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        // `claude -p --output-format json` wraps the answer in an envelope.
+        let text = unwrap_cli_json_envelope(&text)?;
         let usage = LlmUsage {
             chars_in: prompt.len() as u64,
             chars_out: text.len() as u64,
-            prompt_tokens: None,
-            completion_tokens: None,
             raw_json: text.clone(),
+            ..LlmUsage::default()
         };
         Ok((text, usage))
     }
+}
+
+fn tail_8000_str(bytes: &[u8]) -> String {
+    let s = String::from_utf8_lossy(bytes);
+    let start = s.len().saturating_sub(8000);
+    s[start..].to_string()
+}
+
+/// If stdout is a Claude `--output-format json` envelope, return `result`;
+/// an `is_error` envelope maps to a commander failure. Raw text passes through.
+fn unwrap_cli_json_envelope(stdout: &str) -> Result<String, WanaxError> {
+    let trimmed = stdout.trim();
+    if !trimmed.starts_with('{') {
+        return Ok(stdout.to_string());
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return Ok(stdout.to_string());
+    };
+    let Some(result) = v.get("result") else {
+        return Ok(stdout.to_string());
+    };
+    if v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false) {
+        return Err(WanaxError::new(
+            ErrorCode::CommanderSchema,
+            format!(
+                "commander cli reported error: {}",
+                result.as_str().unwrap_or("")
+            ),
+        ));
+    }
+    Ok(result.as_str().unwrap_or_default().to_string())
+}
+
+fn kill_group(pid: u32) {
+    if pid > 0 {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .status();
+    }
+}
+
+fn write_scratch_gitconfig(scratch: &std::path::Path) -> Result<(), WanaxError> {
+    std::fs::write(
+        scratch.join("gitconfig"),
+        "[credential]\n\thelper =\n[commit]\n\tgpgsign = false\n[user]\n\tname = wanax\n\temail = wanax@local\n",
+    )
+    .map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))
 }
 
 fn isolated_scratch() -> Result<PathBuf, WanaxError> {
@@ -128,17 +211,7 @@ impl Commander for CliCommander {
     }
 
     async fn verdict(&self, ctx: &VerdictContext) -> Result<(VerdictDraft, LlmUsage), WanaxError> {
-        let user = format!(
-            "outer_test_exit_code={}\nboundary_ok={}\nclaimed_pass={}\nrework_count={}\n\
-changed_files:\n{}\n\ndiffstat:\n{}\n\nexcerpt:\n{}\n",
-            ctx.outer_test_exit_code,
-            ctx.boundary_ok,
-            ctx.receipt.claimed_pass,
-            ctx.rework_count,
-            ctx.changed_files.join("\n"),
-            ctx.diffstat,
-            ctx.outer_test_excerpt
-        );
+        let user = verdict_user(ctx);
         let (text, usage) = self.complete(VERDICT_SYSTEM, &user).await?;
         let json = extract_json_object(&text)
             .ok_or_else(|| WanaxError::from_code(ErrorCode::CommanderSchema))?;
@@ -200,6 +273,7 @@ mod tests {
                     agent_spec: None,
                 },
                 rework_notes: None,
+                rsi_notes: None,
             })
             .await
             .unwrap();
@@ -211,6 +285,24 @@ mod tests {
         assert!(
             cwd.contains("wanax-commander-"),
             "commander cli must not run in the repo: {cwd}"
+        );
+    }
+
+    #[test]
+    fn cli_json_envelope_unwrapped() {
+        let out = unwrap_cli_json_envelope(
+            "{\"result\":\"{\\\"title\\\":\\\"t\\\"}\",\"is_error\":false}",
+        )
+        .unwrap();
+        assert_eq!(out, "{\"title\":\"t\"}");
+        let err = unwrap_cli_json_envelope(
+            "{\"result\":\"denied\",\"is_error\":true}",
+        );
+        assert!(err.is_err());
+        // Plain text (codex, or claude without json flag) passes through.
+        assert_eq!(
+            unwrap_cli_json_envelope("{\"title\":\"t\"}").unwrap(),
+            "{\"title\":\"t\"}"
         );
     }
 

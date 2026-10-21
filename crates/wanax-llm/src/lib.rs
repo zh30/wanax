@@ -67,6 +67,9 @@ pub struct VerdictDraft {
 pub struct DispatchContext {
     pub contract: Contract,
     pub rework_notes: Option<String>,
+    /// Evidence carried across `wanax improve` iterations (parent run's
+    /// failure data). Never part of the contract itself.
+    pub rsi_notes: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +82,9 @@ pub struct VerdictContext {
     pub outer_test_excerpt: String,
     pub boundary_ok: bool,
     pub rework_count: u32,
+    /// `test_command` result on the untouched base; `None` when baseline was
+    /// disabled or the run predates the feature.
+    pub baseline_test_exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -88,6 +94,9 @@ pub struct LlmUsage {
     pub prompt_tokens: Option<u64>,
     pub completion_tokens: Option<u64>,
     pub raw_json: String,
+    /// Real USD reported by the callee (e.g. a worker CLI). When set it is
+    /// charged directly instead of token/char estimation.
+    pub usd_micros: Option<i64>,
 }
 
 impl LlmUsage {
@@ -170,6 +179,11 @@ pub fn format_dispatch_instruction(ctx: &DispatchContext) -> String {
         s.push_str(notes);
         s.push('\n');
     }
+    if let Some(notes) = &ctx.rsi_notes {
+        s.push_str("\n## Evidence from prior iteration\n\n");
+        s.push_str(notes);
+        s.push('\n');
+    }
     s
 }
 
@@ -190,9 +204,8 @@ impl Commander for MechanicalCommander {
         let usage = LlmUsage {
             chars_in: ctx.contract.intent.len() as u64,
             chars_out: raw.len() as u64,
-            prompt_tokens: None,
-            completion_tokens: None,
             raw_json: raw,
+            ..LlmUsage::default()
         };
         Ok((DispatchPlan::Single(draft), usage))
     }
@@ -226,9 +239,8 @@ impl Commander for MechanicalCommander {
         let usage = LlmUsage {
             chars_in: ctx.diffstat.len() as u64 + ctx.outer_test_excerpt.len() as u64,
             chars_out: raw.len() as u64,
-            prompt_tokens: None,
-            completion_tokens: None,
             raw_json: raw,
+            ..LlmUsage::default()
         };
         Ok((draft, usage))
     }
@@ -303,9 +315,8 @@ pub fn parse_dispatch_plan(raw: &str) -> Result<(DispatchPlan, LlmUsage), WanaxE
     let usage = LlmUsage {
         chars_in: 0,
         chars_out: raw.len() as u64,
-        prompt_tokens: None,
-        completion_tokens: None,
         raw_json: raw.to_string(),
+        ..LlmUsage::default()
     };
     if let Some(units) = v.get("units").and_then(|p| p.as_array()) {
         if units.is_empty() || units.len() > 16 {
@@ -375,9 +386,8 @@ pub fn parse_verdict(raw: &str) -> Result<(VerdictDraft, LlmUsage), WanaxError> 
         LlmUsage {
             chars_in: 0,
             chars_out: raw.len() as u64,
-            prompt_tokens: None,
-            completion_tokens: None,
             raw_json: raw.to_string(),
+            ..LlmUsage::default()
         },
     ))
 }

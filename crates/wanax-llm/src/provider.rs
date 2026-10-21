@@ -35,11 +35,14 @@ pub struct Completion {
 
 #[async_trait]
 pub trait CompletionClient: Send + Sync {
+    /// `json_mode` requests provider-native structured JSON output
+    /// (`response_format` on OpenAI-compatible, forced `tool_use` on Anthropic).
     async fn complete(
         &self,
         system: &str,
         user: &str,
         model: &str,
+        json_mode: bool,
     ) -> Result<Completion, WanaxError>;
 }
 
@@ -84,11 +87,14 @@ impl CompletionClient for LiveClient {
         system: &str,
         user: &str,
         model: &str,
+        json_mode: bool,
     ) -> Result<Completion, WanaxError> {
         match self.kind {
-            ProviderKind::Anthropic => anthropic_complete(self, system, user, model).await,
+            ProviderKind::Anthropic => {
+                anthropic_complete(self, system, user, model, json_mode).await
+            }
             ProviderKind::OpenAi | ProviderKind::OpenAiCompat => {
-                openai_complete(self, system, user, model).await
+                openai_complete(self, system, user, model, json_mode).await
             }
         }
     }
@@ -99,15 +105,19 @@ async fn openai_complete(
     system: &str,
     user: &str,
     model: &str,
+    json_mode: bool,
 ) -> Result<Completion, WanaxError> {
     let url = format!("{}/chat/completions", client.base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
         ]
     });
+    if json_mode {
+        body["response_format"] = serde_json::json!({"type": "json_object"});
+    }
     let res = client
         .http
         .post(url)
@@ -132,14 +142,26 @@ async fn anthropic_complete(
     system: &str,
     user: &str,
     model: &str,
+    json_mode: bool,
 ) -> Result<Completion, WanaxError> {
     let url = format!("{}/v1/messages", client.base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "max_tokens": 4096,
         "system": system,
         "messages": [{"role": "user", "content": user}]
     });
+    if json_mode {
+        // Force a tool call so the reply IS the JSON payload, not prose
+        // wrapping it. The permissive object schema lets the model emit any
+        // object; schema validation stays on our side.
+        body["tools"] = serde_json::json!([{
+            "name": "emit",
+            "description": "Emit the answer as a JSON object.",
+            "input_schema": {"type": "object"}
+        }]);
+        body["tool_choice"] = serde_json::json!({"type": "tool", "name": "emit"});
+    }
     let res = client
         .http
         .post(url)
@@ -187,11 +209,25 @@ pub fn parse_openai_body(value: &Value) -> Result<Completion, WanaxError> {
 }
 
 pub fn parse_anthropic_body(value: &Value) -> Result<Completion, WanaxError> {
-    let text = value
-        .pointer("/content/0/text")
-        .and_then(Value::as_str)
-        .ok_or_else(|| WanaxError::from_code(ErrorCode::CommanderSchema))?
-        .to_string();
+    let content = value
+        .get("content")
+        .and_then(Value::as_array)
+        .ok_or_else(|| WanaxError::from_code(ErrorCode::CommanderSchema))?;
+    // Prefer a forced tool_use block (structured output); fall back to text.
+    let text = content
+        .iter()
+        .find(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        .and_then(|b| b.get("input"))
+        .map(|input| input.to_string())
+        .or_else(|| {
+            content
+                .iter()
+                .find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+                .and_then(|b| b.get("text"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| WanaxError::from_code(ErrorCode::CommanderSchema))?;
     let prompt_tokens = value.pointer("/usage/input_tokens").and_then(Value::as_u64);
     let completion_tokens = value
         .pointer("/usage/output_tokens")
@@ -246,6 +282,7 @@ impl CompletionClient for FixtureClient {
         _system: &str,
         _user: &str,
         _model: &str,
+        _json_mode: bool,
     ) -> Result<Completion, WanaxError> {
         let body = self
             .remaining
@@ -292,5 +329,20 @@ mod tests {
         assert_eq!(c.text, "ok");
         assert_eq!(c.prompt_tokens, Some(3));
         assert_eq!(c.completion_tokens, Some(4));
+    }
+
+    #[test]
+    fn anthropic_tool_use_block_extracted_as_json() {
+        let v = json!({
+            "content": [
+                {"type": "text", "text": "ignored"},
+                {"type": "tool_use", "name": "emit",
+                 "input": {"decision": "accept", "reason": "ok"}}
+            ],
+            "usage": {"input_tokens": 3, "output_tokens": 4}
+        });
+        let c = parse_anthropic_body(&v).unwrap();
+        let parsed: Value = serde_json::from_str(&c.text).unwrap();
+        assert_eq!(parsed["decision"], "accept");
     }
 }

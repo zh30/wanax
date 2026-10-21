@@ -4,19 +4,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
+use wanax_core::envenv;
 use wanax_core::error::{ErrorCode, WanaxError};
+use wanax_core::sandbox::{self, SandboxSpec};
 use wanax_core::types::Receipt;
 use wanax_verify::run_test_command;
 
-const FORBIDDEN_ENV: &[&str] = &[
-    "GIT_ASKPASS",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "SSH_AUTH_SOCK",
-    "SSH_AGENT_PID",
-    "WANAX_COMMANDER_API_KEY",
-    "WANAX_INNER_API_KEY",
-];
+pub use wanax_core::envenv::{env_has_forbidden, FORBIDDEN_ENV};
 
 #[derive(Debug, Clone)]
 pub struct WorkerContext {
@@ -29,6 +23,8 @@ pub struct WorkerContext {
     pub adapter_name: String,
     pub extra_path: Option<PathBuf>,
     pub timeout_secs: u32,
+    pub gitconfig: Option<PathBuf>,
+    pub sandbox: Option<SandboxSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +38,11 @@ pub struct WorkerHandle {
     pub crashed: bool,
     pub timed_out: bool,
     pub raw_artifact_path: Option<String>,
+    /// Real USD reported by the worker CLI, if it emits one (Claude).
+    pub cost_usd_micros: Option<i64>,
+    /// Token usage reported by the worker CLI, if it emits one (Codex).
+    pub usage_in: Option<u64>,
+    pub usage_out: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,22 +64,13 @@ pub trait WorkerAdapter: Send + Sync {
 }
 
 pub fn sanitized_env(ctx: &WorkerContext) -> HashMap<String, String> {
-    let mut env = HashMap::new();
-    for key in [
-        "PATH", "HOME", "USER", "TMPDIR", "LANG", "LC_ALL", "TERM", "SHELL",
-    ] {
-        if let Ok(v) = std::env::var(key) {
-            env.insert(key.to_string(), v);
-        }
+    let mut env = envenv::base_child_env();
+    if let Some(g) = &ctx.gitconfig {
+        envenv::with_git_config(&mut env, g);
     }
     if let Some(extra) = &ctx.extra_path {
-        let path = match env.get("PATH") {
-            Some(p) => format!("{}:{p}", extra.display()),
-            None => extra.display().to_string(),
-        };
-        env.insert("PATH".into(), path);
+        envenv::with_prepend_path(&mut env, extra);
     }
-    env.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
     env.insert("WANAX_RUN_ID".into(), ctx.run_id.clone());
     env.insert("WANAX_WORK_UNIT_ID".into(), ctx.work_unit_id.clone());
     env.insert("WANAX_TEST_COMMAND".into(), ctx.test_command.clone());
@@ -88,8 +80,41 @@ pub fn sanitized_env(ctx: &WorkerContext) -> HashMap<String, String> {
     env
 }
 
-pub fn env_has_forbidden(env: &HashMap<String, String>) -> bool {
-    FORBIDDEN_ENV.iter().any(|k| env.contains_key(*k))
+/// Spawn `bin args` through the optional OS sandbox, in its own process group
+/// so timeouts and cancels can kill the whole tree, not just the leader.
+fn spawn_confined(
+    bin: &Path,
+    args: &[String],
+    ctx: &WorkerContext,
+) -> Result<Command, WanaxError> {
+    let (prog, argv) = match &ctx.sandbox {
+        Some(spec) => sandbox::wrap(spec, bin, args)?,
+        None => (bin.to_path_buf(), args.to_vec()),
+    };
+    let mut cmd = Command::new(prog);
+    cmd.args(argv)
+        .current_dir(&ctx.worktree)
+        .env_clear()
+        .envs(sanitized_env(ctx))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.as_std_mut().process_group(0);
+    }
+    Ok(cmd)
+}
+
+/// Signal every process in the group led by `pid` (negative pid = pgid).
+pub fn kill_process_group(pid: u32, sig: &str) {
+    if pid > 0 {
+        let _ = std::process::Command::new("kill")
+            .args([sig, &format!("-{pid}")])
+            .status();
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -261,7 +286,14 @@ impl WorkerAdapter for FakeAdapter {
         let mut excerpt = String::new();
         let mut duration_ms = 0;
         if run_tests {
-            let r = run_test_command(&ctx.worktree, &ctx.test_command, ctx.test_timeout_secs)?;
+            let env = sanitized_env(ctx);
+            let r = run_test_command(
+                &ctx.worktree,
+                &ctx.test_command,
+                ctx.test_timeout_secs,
+                &env,
+                ctx.sandbox.as_ref(),
+            )?;
             test_exit = r.exit_code;
             excerpt = r.excerpt;
             duration_ms = r.duration_ms;
@@ -277,6 +309,9 @@ impl WorkerAdapter for FakeAdapter {
             crashed: false,
             timed_out: false,
             raw_artifact_path: None,
+            cost_usd_micros: None,
+            usage_in: None,
+            usage_out: None,
         })
     }
 
@@ -361,19 +396,9 @@ impl WorkerAdapter for OctoscodeAdapter {
                 ),
             ));
         }
-        let env = sanitized_env(ctx);
-        debug_assert!(!env_has_forbidden(&env));
         let started = std::time::Instant::now();
-        let mut cmd = Command::new(&bin);
-        cmd.arg("--yolo")
-            .arg("--message")
-            .arg(&ctx.instruction)
-            .current_dir(&ctx.worktree)
-            .env_clear()
-            .envs(&env)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+        let args = vec!["--yolo".to_string(), "--message".to_string(), ctx.instruction.clone()];
+        let mut cmd = spawn_confined(&bin, &args, ctx)?;
         let child = cmd.spawn().map_err(|e| {
             WanaxError::new(
                 ErrorCode::AdapterMissing,
@@ -381,27 +406,22 @@ impl WorkerAdapter for OctoscodeAdapter {
             )
         })?;
         let pid = child.id().unwrap_or(0);
-        let out = tokio::time::timeout(
+        let out = match tokio::time::timeout(
             std::time::Duration::from_secs(u64::from(ctx.timeout_secs)),
             child.wait_with_output(),
         )
         .await
-        .map_err(|_| WanaxError::from_code(ErrorCode::WorkerTimeout))?
-        .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
+        {
+            Ok(v) => v.map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?,
+            Err(_) => {
+                kill_process_group(pid, "-KILL");
+                return Err(WanaxError::from_code(ErrorCode::WorkerTimeout));
+            }
+        };
         if !out.status.success() {
             return Err(WanaxError::from_code(ErrorCode::WorkerCrash));
         }
-        let excerpt = {
-            let mut t = String::from_utf8_lossy(&out.stdout).into_owned();
-            t.push_str(&String::from_utf8_lossy(&out.stderr));
-            t.chars()
-                .rev()
-                .take(8000)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect()
-        };
+        let excerpt = tail_8000(&out.stdout, &out.stderr);
         Ok(WorkerHandle {
             pid,
             claimed_pass: out.status.success(),
@@ -412,6 +432,9 @@ impl WorkerAdapter for OctoscodeAdapter {
             crashed: false,
             timed_out: false,
             raw_artifact_path: None,
+            cost_usd_micros: None,
+            usage_in: None,
+            usage_out: None,
         })
     }
 
@@ -420,11 +443,7 @@ impl WorkerAdapter for OctoscodeAdapter {
     }
 
     async fn cancel(&self, handle: &WorkerHandle) -> Result<(), WanaxError> {
-        if handle.pid > 0 {
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &handle.pid.to_string()])
-                .status();
-        }
+        kill_process_group(handle.pid, "-TERM");
         Ok(())
     }
 
@@ -492,18 +511,9 @@ impl CmdAdapter {
 impl WorkerAdapter for CmdAdapter {
     async fn start(&self, ctx: &WorkerContext) -> Result<WorkerHandle, WanaxError> {
         let bin = self.resolve_bin()?;
-        let mut env = sanitized_env(ctx);
-        env.insert("WANAX_INSTRUCTION".into(), ctx.instruction.clone());
-        debug_assert!(!env_has_forbidden(&env));
         let started = std::time::Instant::now();
-        let mut cmd = Command::new(&bin);
-        cmd.args(&self.args)
-            .current_dir(&ctx.worktree)
-            .env_clear()
-            .envs(&env)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
+        let mut cmd = spawn_confined(&bin, &self.args, ctx)?;
+        cmd.env("WANAX_INSTRUCTION", &ctx.instruction);
         let child = cmd.spawn().map_err(|e| {
             WanaxError::new(
                 ErrorCode::AdapterMissing,
@@ -511,27 +521,22 @@ impl WorkerAdapter for CmdAdapter {
             )
         })?;
         let pid = child.id().unwrap_or(0);
-        let out = tokio::time::timeout(
+        let out = match tokio::time::timeout(
             std::time::Duration::from_secs(u64::from(ctx.timeout_secs)),
             child.wait_with_output(),
         )
         .await
-        .map_err(|_| WanaxError::from_code(ErrorCode::WorkerTimeout))?
-        .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
+        {
+            Ok(v) => v.map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?,
+            Err(_) => {
+                kill_process_group(pid, "-KILL");
+                return Err(WanaxError::from_code(ErrorCode::WorkerTimeout));
+            }
+        };
         if !out.status.success() {
             return Err(WanaxError::from_code(ErrorCode::WorkerCrash));
         }
-        let excerpt = {
-            let mut t = String::from_utf8_lossy(&out.stdout).into_owned();
-            t.push_str(&String::from_utf8_lossy(&out.stderr));
-            t.chars()
-                .rev()
-                .take(8000)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect()
-        };
+        let excerpt = tail_8000(&out.stdout, &out.stderr);
         Ok(WorkerHandle {
             pid,
             claimed_pass: out.status.success(),
@@ -542,6 +547,9 @@ impl WorkerAdapter for CmdAdapter {
             crashed: false,
             timed_out: false,
             raw_artifact_path: None,
+            cost_usd_micros: None,
+            usage_in: None,
+            usage_out: None,
         })
     }
 
@@ -550,11 +558,7 @@ impl WorkerAdapter for CmdAdapter {
     }
 
     async fn cancel(&self, handle: &WorkerHandle) -> Result<(), WanaxError> {
-        if handle.pid > 0 {
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &handle.pid.to_string()])
-                .status();
-        }
+        kill_process_group(handle.pid, "-TERM");
         Ok(())
     }
 
@@ -580,8 +584,13 @@ impl WorkerAdapter for CmdAdapter {
     }
 }
 
-const CLAUDE_FLAGS: &[&str] = &["-p", "--dangerously-skip-permissions"];
-const CODEX_FLAGS: &[&str] = &["exec", "--sandbox", "workspace-write", "-"];
+const CLAUDE_FLAGS: &[&str] = &[
+    "-p",
+    "--dangerously-skip-permissions",
+    "--output-format",
+    "json",
+];
+const CODEX_FLAGS: &[&str] = &["exec", "--sandbox", "workspace-write", "--json", "-"];
 
 pub struct ClaudeAdapter {
     pub bin: String,
@@ -680,12 +689,99 @@ impl WorkerAdapter for CodexAdapter {
 }
 
 fn cancel_pid(pid: u32) -> Result<(), WanaxError> {
-    if pid > 0 {
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status();
-    }
+    kill_process_group(pid, "-TERM");
     Ok(())
+}
+
+fn tail_8000(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut t = String::from_utf8_lossy(stdout).into_owned();
+    t.push_str(&String::from_utf8_lossy(stderr));
+    t.chars()
+        .rev()
+        .take(8000)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
+}
+
+/// Metrics parsed from a worker CLI's structured output.
+#[derive(Debug, Clone, Default)]
+struct CliMeter {
+    cost_usd_micros: Option<i64>,
+    usage_in: Option<u64>,
+    usage_out: Option<u64>,
+    turns: Option<u32>,
+    /// Final assistant text to use as the excerpt.
+    text: Option<String>,
+    is_error: bool,
+}
+
+/// `claude -p --output-format json` emits one JSON object with cost/turns.
+fn parse_claude_json(stdout: &str) -> Option<CliMeter> {
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    if v.get("is_error").is_none() && v.get("num_turns").is_none() {
+        return None;
+    }
+    Some(CliMeter {
+        cost_usd_micros: v
+            .get("total_cost_usd")
+            .and_then(|x| x.as_f64())
+            .map(|usd| (usd * 1_000_000.0).round() as i64),
+        usage_in: v
+            .get("usage")
+            .and_then(|u| u.get("input_tokens"))
+            .and_then(|x| x.as_u64()),
+        usage_out: v
+            .get("usage")
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(|x| x.as_u64()),
+        turns: v
+            .get("num_turns")
+            .and_then(|x| x.as_u64())
+            .map(|n| n as u32),
+        text: v.get("result").and_then(|x| x.as_str()).map(String::from),
+        is_error: v
+            .get("is_error")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false),
+    })
+}
+
+/// `codex exec --json` emits JSONL events; `turn.completed` carries usage.
+fn parse_codex_jsonl(stdout: &str) -> CliMeter {
+    let mut m = CliMeter::default();
+    let mut turns = 0u32;
+    let mut texts = Vec::new();
+    for line in stdout.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("turn.completed") => {
+                turns += 1;
+                if let Some(u) = v.get("usage") {
+                    m.usage_in = u.get("input_tokens").and_then(|x| x.as_u64()).or(m.usage_in);
+                    m.usage_out = u.get("output_tokens").and_then(|x| x.as_u64()).or(m.usage_out);
+                }
+            }
+            Some("item.completed")
+                if v.pointer("/item/type").and_then(|t| t.as_str()) == Some("agent_message") =>
+            {
+                if let Some(t) = v.pointer("/item/text").and_then(|x| x.as_str()) {
+                    texts.push(t.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    if turns > 0 {
+        m.turns = Some(turns);
+    }
+    if !texts.is_empty() {
+        m.text = Some(texts.join("\n"));
+    }
+    m
 }
 
 fn receipt_from_handle(
@@ -716,19 +812,9 @@ async fn start_stdin_cli(
     adapter: &str,
 ) -> Result<WorkerHandle, WanaxError> {
     use tokio::io::AsyncWriteExt;
-    let mut env = sanitized_env(ctx);
-    env.insert("WANAX_INSTRUCTION".into(), ctx.instruction.clone());
-    debug_assert!(!env_has_forbidden(&env));
     let started = std::time::Instant::now();
-    let mut cmd = Command::new(&bin);
-    cmd.args(args)
-        .current_dir(&ctx.worktree)
-        .env_clear()
-        .envs(&env)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
+    let mut cmd = spawn_confined(&bin, args, ctx)?;
+    cmd.env("WANAX_INSTRUCTION", &ctx.instruction);
     let mut child = cmd.spawn().map_err(|e| {
         WanaxError::new(
             ErrorCode::AdapterMissing,
@@ -742,38 +828,57 @@ async fn start_stdin_cli(
             .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
     }
     let pid = child.id().unwrap_or(0);
-    let out = tokio::time::timeout(
+    let out = match tokio::time::timeout(
         std::time::Duration::from_secs(u64::from(ctx.timeout_secs)),
         child.wait_with_output(),
     )
     .await
-    .map_err(|_| WanaxError::from_code(ErrorCode::WorkerTimeout))?
-    .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
-    if !out.status.success() {
-        return Err(WanaxError::from_code(ErrorCode::WorkerCrash));
-    }
-    let excerpt = {
-        let mut t = String::from_utf8_lossy(&out.stdout).into_owned();
-        t.push_str(&String::from_utf8_lossy(&out.stderr));
-        t.chars()
-            .rev()
-            .take(8000)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect()
+    {
+        Ok(v) => v.map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?,
+        Err(_) => {
+            kill_process_group(pid, "-KILL");
+            return Err(WanaxError::from_code(ErrorCode::WorkerTimeout));
+        }
     };
-    let _ = adapter;
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let meter = match adapter {
+        "claude" => parse_claude_json(&stdout).unwrap_or_default(),
+        "codex" => parse_codex_jsonl(&stdout),
+        _ => CliMeter::default(),
+    };
+    let excerpt = match meter.text {
+        Some(ref t) if !t.is_empty() => {
+            let mut t = t.clone();
+            t.push_str(&String::from_utf8_lossy(&out.stderr));
+            t.chars()
+                .rev()
+                .take(8000)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect()
+        }
+        _ => tail_8000(&out.stdout, &out.stderr),
+    };
+    if meter.is_error || !out.status.success() {
+        return Err(WanaxError::new(
+            ErrorCode::WorkerCrash,
+            excerpt.chars().take(2000).collect::<String>(),
+        ));
+    }
     Ok(WorkerHandle {
         pid,
         claimed_pass: out.status.success(),
         test_exit_code: out.status.code().unwrap_or(1),
         test_excerpt: excerpt,
         duration_ms: started.elapsed().as_millis() as u64,
-        turns: 1,
+        turns: meter.turns.unwrap_or(1).max(1),
         crashed: false,
         timed_out: false,
         raw_artifact_path: None,
+        cost_usd_micros: meter.cost_usd_micros,
+        usage_in: meter.usage_in,
+        usage_out: meter.usage_out,
     })
 }
 
@@ -793,6 +898,8 @@ mod tests {
             adapter_name: "fake".into(),
             extra_path: None,
             timeout_secs: 30,
+            gitconfig: None,
+            sandbox: None,
         };
         let env = sanitized_env(&ctx);
         assert!(!env_has_forbidden(&env));
@@ -836,6 +943,8 @@ mod tests {
             adapter_name: "cmd".into(),
             extra_path: None,
             timeout_secs: 10,
+            gitconfig: None,
+            sandbox: None,
         };
         adapter.start(&ctx).await.unwrap();
         assert_eq!(
@@ -869,6 +978,8 @@ mod tests {
             adapter_name: "cmd".into(),
             extra_path: None,
             timeout_secs: 1,
+            gitconfig: None,
+            sandbox: None,
         };
         let err = adapter.start(&ctx).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::WorkerTimeout);
@@ -885,6 +996,8 @@ mod tests {
             adapter_name: "claude".into(),
             extra_path: None,
             timeout_secs: 10,
+            gitconfig: None,
+            sandbox: None,
         }
     }
 
@@ -938,6 +1051,127 @@ mod tests {
         let args = std::fs::read_to_string(dir.path().join("args.txt")).unwrap();
         assert!(args.contains("exec"));
         assert!(args.contains("workspace-write"));
+        assert!(args.contains("--json"));
         assert!(!args.contains("do the work"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_whole_process_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("grandchild.pid");
+        let script = dir.path().join("tree.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nsleep 60 &\necho $! > '{}'\nsleep 60\n",
+                pidfile.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let adapter = CmdAdapter::new(script.display().to_string(), Vec::new());
+        let mut ctx = ctx_in(dir.path(), "tree");
+        ctx.adapter_name = "cmd".into();
+        ctx.timeout_secs = 1;
+        let err = adapter.start(&ctx).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::WorkerTimeout);
+        let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_string();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(!alive, "grandchild {pid} survived the timeout kill");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sandbox_denies_writes_outside_worktree() {
+        if wanax_core::sandbox::detect_backend("auto") == wanax_core::sandbox::SandboxBackend::None {
+            return; // no seatbelt/bwrap on this host
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        // Escape target lives under $HOME (not TMPDIR — that IS writable).
+        let escape = wanax_core::config::home_dir().join(".wanax-sb-escape-test");
+        let _ = std::fs::remove_file(&escape);
+        let script = dir.path().join("w.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ntouch '{}'\ntouch inside.txt\n",
+                escape.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let spec = wanax_core::sandbox::resolve(
+            "auto",
+            vec![wt.clone()],
+            &[],
+            Some(dir.path().join("sandbox.sb")),
+        )
+        .unwrap();
+        let adapter = CmdAdapter::new(script.display().to_string(), Vec::new());
+        let mut ctx = ctx_in(&wt, "write");
+        ctx.adapter_name = "cmd".into();
+        ctx.sandbox = Some(spec);
+        adapter.start(&ctx).await.unwrap();
+        assert!(
+            !escape.exists(),
+            "sandboxed child wrote outside its worktree"
+        );
+        assert!(wt.join("inside.txt").is_file());
+        let _ = std::fs::remove_file(&escape);
+    }
+
+    #[test]
+    fn claude_json_metering_parsed() {
+        let m = parse_claude_json(
+            r#"{"is_error":false,"num_turns":3,"total_cost_usd":0.5,"result":"done"}"#,
+        )
+        .unwrap();
+        assert_eq!(m.turns, Some(3));
+        assert_eq!(m.cost_usd_micros, Some(500_000));
+        assert_eq!(m.text.as_deref(), Some("done"));
+        assert!(!m.is_error);
+        // A bare text reply (old claude) degrades to no metering.
+        assert!(parse_claude_json("not json").is_none());
+    }
+
+    #[test]
+    fn codex_jsonl_metering_parsed() {
+        let m = parse_codex_jsonl(
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"hi\"}}\n\
+             {\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n",
+        );
+        assert_eq!(m.usage_in, Some(10));
+        assert_eq!(m.usage_out, Some(5));
+        assert_eq!(m.turns, Some(1));
+        assert_eq!(m.text.as_deref(), Some("hi"));
+    }
+
+    #[tokio::test]
+    async fn claude_is_error_maps_to_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("claude");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s' '{\"is_error\":true,\"result\":\"refused\"}'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let adapter = ClaudeAdapter::new(script.display().to_string(), Vec::new());
+        let err = adapter.start(&ctx_in(dir.path(), "x")).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::WorkerCrash);
     }
 }
