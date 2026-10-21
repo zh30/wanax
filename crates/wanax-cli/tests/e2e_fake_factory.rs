@@ -1981,6 +1981,41 @@ fn egress_isolated_denies_all_network() {
     assert!(profile.contains("(deny network*)"), "{profile}");
 }
 
+/// `wanax audit` verifies the tombstone: an intact envelope passes; a
+/// tampered payload is caught by the per-event hash.
+#[test]
+fn audit_verifies_tombstone_integrity() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"));
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+
+    let out = h.run(&["audit", &run_id], 0);
+    assert!(out.stdout.contains("integrity: OK"), "{}", out.stdout);
+
+    // Tamper: flip a payload field inside envelope.json — the stored
+    // payload_sha256 must catch it.
+    let env_path = h
+        .path()
+        .join(format!(".wanax/runs/{run_id}/envelope.json"));
+    let mut env: Value =
+        serde_json::from_str(&fs::read_to_string(&env_path).unwrap()).unwrap();
+    env["events"][0]["payload"]["injected"] = serde_json::json!("tampered");
+    fs::write(&env_path, serde_json::to_string_pretty(&env).unwrap()).unwrap();
+    let out = h.run(&["audit", &run_id], 1);
+    assert!(
+        out.stdout.contains("payload_sha256 mismatch"),
+        "{}",
+        out.stdout
+    );
+}
+
 /// Secret content scan: a worker that writes an API key into src/lib.rs
 /// passes the path boundary but the accept gate still rejects the diff —
 /// path globs can't see content.

@@ -33,6 +33,7 @@ pub enum ErrorCode {
     Rejected,
     Escalated,
     SecretLeak,
+    Audit,
 }
 
 impl ErrorCode {
@@ -68,6 +69,7 @@ impl ErrorCode {
             Self::Rejected => "E_REJECTED",
             Self::Escalated => "E_ESCALATE",
             Self::SecretLeak => "E_SECRET_LEAK",
+            Self::Audit => "E_AUDIT",
         }
     }
 
@@ -119,6 +121,7 @@ impl ErrorCode {
             Self::Rejected => "verdict rejected",
             Self::Escalated => "escalated to human",
             Self::SecretLeak => "secret material detected in diff",
+            Self::Audit => "tombstone integrity check failed",
         }
     }
 }

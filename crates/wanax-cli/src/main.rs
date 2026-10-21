@@ -1,3 +1,4 @@
+mod audit;
 mod check;
 mod clean;
 mod doctor;
@@ -125,6 +126,11 @@ enum Commands {
         #[arg(long)]
         suggest: bool,
     },
+    /// Verify a run's tombstone integrity: per-event payload hashes,
+    /// sequence/id invariants, terminal-state evidence, DB cross-check.
+    Audit {
+        run_id: String,
+    },
     /// Mechanical contract preflight: glob coverage, bound_test existence,
     /// vacuous-green traps, adapter availability. Exits non-zero on FAIL.
     Check {
@@ -228,6 +234,7 @@ async fn run() -> Result<(), WanaxError> {
             })
             .await
         }
+        Commands::Audit { run_id } => audit::run(audit::AuditOpts { run_id, data_dir }).await,
         Commands::Check { contract, adapter } => {
             check::run(check::CheckOpts {
                 contract,
