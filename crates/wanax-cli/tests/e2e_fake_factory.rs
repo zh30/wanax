@@ -1867,6 +1867,39 @@ fn bound_test_blocks_vacuous_accept() {
     );
 }
 
+/// `wanax replay` reconstructs unit state from the envelope and
+/// reconciles it against the DB cache — human view into resume's truth.
+#[test]
+fn replay_reconstructs_and_reconciles() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    let out = h.run(&["replay", &run_id], 0);
+    assert!(out.stdout.contains("unit(s) reconstructed"), "{}", out.stdout);
+    assert!(out.stdout.contains("divergence: none"), "{}", out.stdout);
+    let out = h.run(&["replay", &run_id, "--json"], 0);
+    let v: Value = serde_json::from_str(out.stdout.trim()).unwrap();
+    assert_eq!(v["envelope_units"].as_u64().unwrap(), 1);
+    assert_eq!(v["diverged"], false);
+    assert_eq!(v["units"][0]["state"], "accepted");
+    // Wipe the cache — replay still reconstructs and reports divergence.
+    let wiped = Command::new("sqlite3")
+        .arg(h.data.path().join("wanax.db"))
+        .arg(format!("DELETE FROM work_units WHERE run_id = '{run_id}'"))
+        .output()
+        .expect("sqlite3");
+    assert!(wiped.status.success(), "{}", String::from_utf8_lossy(&wiped.stderr));
+    let out = h.run(&["replay", &run_id], 0);
+    assert!(out.stdout.contains("missing in DB"), "{}", out.stdout);
+    assert!(out.stdout.contains("divergence: 1"), "{}", out.stdout);
+}
+
 /// must_have criteria are mechanical: "add module X" that never creates
 /// X is enforced down to rework even when tests are green.
 #[test]
