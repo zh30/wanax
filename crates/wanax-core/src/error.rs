@@ -30,6 +30,7 @@ pub enum ErrorCode {
     Resume,
     DagCycle,
     Plugin,
+    SecretLeak,
 }
 
 impl ErrorCode {
@@ -62,6 +63,7 @@ impl ErrorCode {
             Self::Resume => "E_RESUME",
             Self::DagCycle => "E_DAG_CYCLE",
             Self::Plugin => "E_PLUGIN",
+            Self::SecretLeak => "E_SECRET_LEAK",
         }
     }
 
@@ -110,6 +112,7 @@ impl ErrorCode {
             Self::Resume => "cannot resume run",
             Self::DagCycle => "work unit DAG has a cycle",
             Self::Plugin => "verifier plugin failed",
+            Self::SecretLeak => "secret material detected in diff",
         }
     }
 }

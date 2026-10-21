@@ -1981,6 +1981,40 @@ fn egress_isolated_denies_all_network() {
     assert!(profile.contains("(deny network*)"), "{profile}");
 }
 
+/// Secret content scan: a worker that writes an API key into src/lib.rs
+/// passes the path boundary but the accept gate still rejects the diff —
+/// path globs can't see content.
+#[test]
+fn secret_in_diff_rejects_accept() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&format!(
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}\nconst K: &str = \"sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ12\";\n'''\n"
+    ));
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        1,
+    );
+    assert!(
+        out.stdout.contains("state=rejected"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    let env = h.envelope();
+    let leak = env["events"].as_array().unwrap().iter().any(|e| {
+        e["kind"] == "error"
+            && e["payload"]["code"] == "E_SECRET_LEAK"
+            && e["payload"]["findings"]
+                .as_array()
+                .is_some_and(|f| f.iter().any(|x| x["kind"] == "openai-key"))
+    });
+    assert!(leak, "{env}");
+    // The secret itself never lands in the tombstone.
+    assert!(!env.to_string().contains("sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ12"));
+}
+
 /// `wanax check`: a sound contract passes; a contract that names a missing
 /// bound_test fails with exit != 0 (it could never be accepted).
 #[test]

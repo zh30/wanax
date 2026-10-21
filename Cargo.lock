@@ -2075,6 +2075,7 @@ name = "wanax-verify"
 version = "1.0.0"
 dependencies = [
  "globset",
+ "regex",
  "tempfile",
  "wanax-core",
 ]

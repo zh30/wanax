@@ -1414,6 +1414,29 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             );
         }
 
+        // Content-level secret scan on the diff's added lines — forbidden
+        // globs only see paths; a key committed into src/** is still a leak.
+        let secrets = wanax_git::diff_patch(repo, &base_sha, &receipt.commit_sha)
+            .map(|d| wanax_verify::scan_diff_added(&d))
+            .unwrap_or_default();
+        if !secrets.is_empty() {
+            let _ = append_event(
+                repo,
+                &run.id,
+                "outer_reviewing",
+                make_event(
+                    Actor::Verifier,
+                    EventKind::Error,
+                    json!({
+                        "code": ErrorCode::SecretLeak.as_str(),
+                        "findings": secrets.iter().map(|f| json!({
+                            "path": f.path, "line": f.line, "kind": f.kind
+                        })).collect::<Vec<_>>(),
+                    }),
+                ),
+            );
+        }
+
         // bound_test enforcement: a criterion may name a test that must exist
         // (verified via `cargo test -- --list` so a filter that matches
         // nothing cannot pass vacuously) and pass in the outer worktree.
@@ -1531,7 +1554,8 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             current_rework,
         )
         .with_plugin(plugin.ok)
-        .with_bound_tests(bound_ok);
+        .with_bound_tests(bound_ok)
+        .with_secrets(secrets.is_empty());
 
         let vctx = VerdictContext {
             contract: contract.clone(),
@@ -1812,7 +1836,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     store.update_work_unit(existing).await?;
                 }
                 rework_notes = Some(format!(
-                    "Previous attempt failed.\nexit={outer_code}\n{}{}",
+                    "Previous attempt failed.\nexit={outer_code}\n{}{}{}",
                     test.excerpt,
                     if bound_failing.is_empty() {
                         String::new()
@@ -1820,6 +1844,18 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                         format!(
                             "bound tests missing or failing: {}\n",
                             bound_failing.join(", ")
+                        )
+                    },
+                    if secrets.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "secret material in diff — remove it: {}\n",
+                            secrets
+                                .iter()
+                                .map(|f| format!("{}:{} ({})", f.path, f.line, f.kind))
+                                .collect::<Vec<_>>()
+                                .join(", ")
                         )
                     }
                 ));
