@@ -2953,13 +2953,24 @@ fn sandbox_for(
 ) -> Result<SandboxSpec, WanaxError> {
     let rd = run_dir(repo, run_id);
     let git_dir = git_common_dir(repo).unwrap_or_else(|_| repo.join(".git"));
-    sandbox::resolve(
+    let spec = sandbox::resolve(
         &cfg.file.sandbox.mode,
         vec![worktree.to_path_buf(), git_dir, rd.clone()],
         &cfg.file.sandbox.extra_write_paths,
         Some(rd.join(format!("sandbox-{role}.sb"))),
         net,
-    )
+    )?;
+    if !matches!(net, wanax_core::sandbox::NetConfine::Open)
+        && spec.backend == wanax_core::sandbox::SandboxBackend::None
+    {
+        // Egress confinement was requested but there is no sandbox backend
+        // to enforce it (e.g. bwrap missing on Linux). Silent degradation of
+        // a security control must never be silent.
+        println!(
+            "warn: egress confinement requested for {role} but no sandbox backend available; child network is unrestricted"
+        );
+    }
+    Ok(spec)
 }
 
 fn baseline_exit_from_envelope(repo: &Path, run_id: &str) -> Option<i32> {

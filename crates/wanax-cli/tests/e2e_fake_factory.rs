@@ -1933,21 +1933,25 @@ fn egress_allowlist_confines_worker_network() {
     let egress = started["payload"]["egress"].as_str().unwrap_or("");
     assert!(egress.starts_with("allowlist:"), "{env}");
 
-    // The inner sandbox profile denies outbound except the local proxy.
-    let runs = h.path().join(".wanax/runs");
-    let profile = fs::read_dir(&runs)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find_map(|e| {
-            let p = e.path().join("sandbox-inner.sb");
-            p.is_file().then(|| fs::read_to_string(p).unwrap())
-        })
-        .expect("inner sb profile");
-    assert!(
-        profile.contains("(deny network-outbound)")
-            && profile.contains("(remote tcp \"localhost:"),
-        "{profile}"
-    );
+    // The inner sandbox profile denies outbound except the local proxy —
+    // the `.sb` artifact is Seatbelt-only (bwrap confinement is argv).
+    #[cfg(target_os = "macos")]
+    {
+        let runs = h.path().join(".wanax/runs");
+        let profile = fs::read_dir(&runs)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find_map(|e| {
+                let p = e.path().join("sandbox-inner.sb");
+                p.is_file().then(|| fs::read_to_string(p).unwrap())
+            })
+            .expect("inner sb profile");
+        assert!(
+            profile.contains("(deny network-outbound)")
+                && profile.contains("(remote tcp \"localhost:"),
+            "{profile}"
+        );
+    }
 }
 
 /// egress = "isolated": no proxy, no network at all.
@@ -1969,16 +1973,19 @@ fn egress_isolated_denies_all_network() {
         0,
     );
     assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
-    let runs = h.path().join(".wanax/runs");
-    let profile = fs::read_dir(&runs)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find_map(|e| {
-            let p = e.path().join("sandbox-inner.sb");
-            p.is_file().then(|| fs::read_to_string(p).unwrap())
-        })
-        .expect("inner sb profile");
-    assert!(profile.contains("(deny network*)"), "{profile}");
+    #[cfg(target_os = "macos")]
+    {
+        let runs = h.path().join(".wanax/runs");
+        let profile = fs::read_dir(&runs)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find_map(|e| {
+                let p = e.path().join("sandbox-inner.sb");
+                p.is_file().then(|| fs::read_to_string(p).unwrap())
+            })
+            .expect("inner sb profile");
+        assert!(profile.contains("(deny network*)"), "{profile}");
+    }
 }
 
 /// `[run] notify_cmd` fires once on terminal state with WANAX_* env —
