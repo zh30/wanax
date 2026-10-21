@@ -74,6 +74,9 @@ enum Commands {
     },
     Status {
         run_id: Option<String>,
+        /// Machine-readable run listing/detail for scripts and hooks.
+        #[arg(long)]
+        json: bool,
     },
     Cancel {
         run_id: String,
@@ -204,7 +207,7 @@ async fn run() -> Result<(), WanaxError> {
             })
             .await
         }
-        Commands::Status { run_id } => status(data_dir, run_id).await,
+        Commands::Status { run_id, json } => status(data_dir, run_id, json).await,
         Commands::Cancel { run_id } => cancel(data_dir, run_id).await,
         Commands::Resume {
             run_id,
@@ -291,8 +294,40 @@ async fn open_store(data_dir: PathBuf) -> Result<Store, WanaxError> {
     Store::open(&data_dir.join("wanax.db")).await
 }
 
-async fn status(data_dir: PathBuf, run_id: Option<String>) -> Result<(), WanaxError> {
+async fn status(data_dir: PathBuf, run_id: Option<String>, json: bool) -> Result<(), WanaxError> {
     let store = open_store(data_dir).await?;
+    if json {
+        let out = match run_id {
+            Some(id) => {
+                let run = store.get_run(&id).await?;
+                let units = store.work_units_for_run(&run.id).await.unwrap_or_default();
+                serde_json::json!({
+                    "run_id": run.id,
+                    "state": run.state.as_str(),
+                    "spent_usd_micros": run.spent_usd_micros,
+                    "spent_turns": run.spent_inner_turns,
+                    "adapter": run.worker_adapter.as_str(),
+                    "units": units.iter().map(|u| serde_json::json!({
+                        "id": u.id, "seq": u.seq, "title": u.title,
+                        "state": u.state.as_str(), "rework_count": u.rework_count,
+                    })).collect::<Vec<_>>(),
+                    "last_error": run.last_error,
+                })
+            }
+            None => {
+                let runs = store.list_runs().await?;
+                serde_json::json!({
+                    "runs": runs.iter().map(|r| serde_json::json!({
+                        "run_id": r.id, "state": r.state.as_str(),
+                        "spent_usd_micros": r.spent_usd_micros,
+                        "spent_turns": r.spent_inner_turns,
+                    })).collect::<Vec<_>>(),
+                })
+            }
+        };
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+        return Ok(());
+    }
     match run_id {
         None => {
             let runs = store.list_runs().await?;

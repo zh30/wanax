@@ -1867,6 +1867,51 @@ fn bound_test_blocks_vacuous_accept() {
     );
 }
 
+/// `status --json` emits machine-readable run detail; `doctor` resolves
+/// the acp adapter binary instead of falling through to octoscode.
+#[test]
+fn status_json_and_doctor_acp() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    let out = h.run(&["status", &run_id, "--json"], 0);
+    let v: Value = serde_json::from_str(out.stdout.trim()).unwrap();
+    assert_eq!(v["run_id"], run_id);
+    assert_eq!(v["state"], "accepted");
+    assert_eq!(v["units"][0]["state"], "accepted");
+    let out = h.run(&["status", "--json"], 0);
+    let v: Value = serde_json::from_str(out.stdout.trim()).unwrap();
+    assert!(
+        v["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["run_id"] == run_id),
+        "{}",
+        out.stdout
+    );
+    // doctor: adapter=acp must check acp_bin, not octoscode.
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t = t.replace(
+        "adapter = \"fake\"",
+        "adapter = \"acp\"\nacp_bin = \"definitely-not-installed-acp-bin\"",
+    );
+    fs::write(&p, t).unwrap();
+    let out = h.run(&["doctor"], 0);
+    assert!(
+        out.stdout.contains("adapter definitely-not-installed-acp-bin"),
+        "doctor should check acp_bin: {}",
+        out.stdout
+    );
+}
+
 /// `wanax replay` reconstructs unit state from the envelope and
 /// reconciles it against the DB cache — human view into resume's truth.
 #[test]
