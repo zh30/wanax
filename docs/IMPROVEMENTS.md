@@ -176,6 +176,7 @@ extra_write_paths = []   # 额外可写目录（用户工具链缓存等）
 | R-21 | 事件溯源 resume | `unit_seeded`/`unit_dispatched`/`receipt_submitted`/`verdict` 携带重建所需全部字段；resume 以 envelope 重放为准，DB 行缺失/分歧时自愈并记 WARN。旧 envelope 缺字段 → 自动回退 DB 路径 | ✅ 已实现+测试 |
 | R-22 | egress 白名单代理 | `[worker] egress = "allowlist"`：worker/test 子进程注入 HTTP(S)_PROXY → 本地 CONNECT 代理只放行白名单域名（base_url host 自动并入），Seatbelt 再 `deny network-outbound` 只留 `localhost:proxy`——绕过代理的直连连 DNS 都不通。`"isolated"` = 完全断网（bwrap 用 `--unshare-net`）。补齐文件沙箱之外的最后一层 | ✅ 已实现+测试 |
 | R-23 | `wanax check` 契约预检 | 机械预检再进 run：bound_test 名字对照 `cargo test -- --list`（缺失 → FAIL exit 4）、allowed_globs 匹配 0 文件/覆盖 tests/ → WARN、test_command 二进制存在性、adapter preflight、egress 空白名单 → FAIL/WARN。把 dogfood 中反复踩到的契约坑左移到 run 之前 | ✅ 已实现+测试 |
+| R-35 | `wanax watch` | 轮询 run 到终态：0=accepted、1=其他终态、`--timeout-secs` 限时——观测三角收口（status=当下、notify=钩子、watch=人） | ✅ 已实现+测试 |
 | R-34 | `wanax diff` | run 的 inner 分支 diff——stat 默认，`--patch` 完整补丁；不用等 export 就能看产出 | ✅ 已实现+测试 |
 | R-33 | 真模型 dogfood | OpenRouter 通道（opus commander + glm worker via cmd adapter）：真 dispatch → seatbelt worktree 真写 → 真 cargo test → bound/must/边界全门 → 真 verdict accept → audit/replay/export 全绿；`improve --from` 父链 + 签名早停真实工作；抓出 check 对创建型 bound_test 误杀的设计 bug（已修） | ✅ 已验证 |
 | R-32 | `status --json` + doctor acp | status 出 JSON（列表/单 run 带 units）；doctor 补 acp adapter 的 acp_bin 解析（之前落进 octoscode 兜底误报） | ✅ 已实现+测试 |

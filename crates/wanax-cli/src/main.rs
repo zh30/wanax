@@ -13,6 +13,7 @@ mod notify;
 mod replay;
 mod replay_cmd;
 mod report;
+mod watch;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -139,6 +140,15 @@ enum Commands {
     /// sequence/id invariants, terminal-state evidence, DB cross-check.
     Audit {
         run_id: String,
+    },
+    /// Poll a run until terminal state (exit 0 = accepted, 1 = other).
+    Watch {
+        run_id: String,
+        #[arg(long, default_value_t = 5)]
+        interval_secs: u64,
+        /// Give up after N seconds (0 = never).
+        #[arg(long, default_value_t = 0)]
+        timeout_secs: u64,
     },
     /// Show the run's inner diff (stat by default, --patch for unified).
     Diff {
@@ -272,6 +282,9 @@ async fn run() -> Result<(), WanaxError> {
         }
         Commands::Diff { run_id, patch } => {
             diff::run(diff::DiffOpts { run_id, patch, data_dir }).await
+        }
+        Commands::Watch { run_id, interval_secs, timeout_secs } => {
+            watch::run(watch::WatchOpts { run_id, interval_secs, timeout_secs, data_dir }).await
         }
         Commands::Check { contract, adapter } => {
             check::run(check::CheckOpts {
