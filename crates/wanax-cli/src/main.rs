@@ -10,6 +10,7 @@ mod init;
 mod logging;
 mod notify;
 mod replay;
+mod replay_cmd;
 mod report;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -135,6 +136,13 @@ enum Commands {
     Audit {
         run_id: String,
     },
+    /// Replay the tombstone envelope into reconstructed unit state and
+    /// reconcile it against the work_units cache (resume's own view).
+    Replay {
+        run_id: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Bundle a run's audit evidence (tombstone, contract, inner diff,
     /// replayed state, LEARNINGS, manifest) into one directory.
     Export {
@@ -248,6 +256,9 @@ async fn run() -> Result<(), WanaxError> {
         Commands::Audit { run_id } => audit::run(audit::AuditOpts { run_id, data_dir }).await,
         Commands::Export { run_id, out } => {
             export::run(export::ExportOpts { run_id, out, data_dir }).await
+        }
+        Commands::Replay { run_id, json } => {
+            replay_cmd::run(replay_cmd::ReplayCmdOpts { run_id, json, data_dir }).await
         }
         Commands::Check { contract, adapter } => {
             check::run(check::CheckOpts {
