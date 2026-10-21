@@ -1,9 +1,11 @@
+mod clean;
 mod doctor;
 mod engine;
 mod gh;
 mod i18n;
 mod init;
 mod logging;
+mod report;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -87,6 +89,54 @@ enum Commands {
     Cost {
         run_id: Option<String>,
     },
+    /// RSI loop: rerun the contract up to N iterations, carrying evidence
+    /// from each failed run into the next dispatch. Contract never mutates.
+    Improve {
+        #[arg(long)]
+        contract: PathBuf,
+        #[arg(long)]
+        allow_dirty: bool,
+        #[arg(long)]
+        adapter: Option<AdapterArg>,
+        /// Max iterations (default 3, capped at 8).
+        #[arg(long)]
+        iterations: Option<u32>,
+        /// Seed iteration 1 with evidence from an earlier terminal run of the
+        /// same contract.
+        #[arg(long)]
+        from: Option<String>,
+        /// Adapter escalation ladder, iteration i uses adapters[i-1]
+        /// (comma-separated, e.g. --adapters cmd,claude).
+        #[arg(long, value_delimiter = ',')]
+        adapters: Vec<AdapterArg>,
+        /// Loop-level USD cap summed across all iterations (e.g. "8.00").
+        #[arg(long)]
+        max_total_usd: Option<String>,
+    },
+    /// Fitness view over run tombstones (all runs, or one).
+    Report {
+        run_id: Option<String>,
+        /// Machine-readable aggregate output.
+        #[arg(long)]
+        json: bool,
+        /// Rule-based suggestions: is the bottleneck spec or implementation.
+        #[arg(long)]
+        suggest: bool,
+    },
+    /// Remove worktrees/branches left by finished runs. Accepted runs are
+    /// kept unless --include-accepted; tombstones kept unless --runs.
+    Clean {
+        #[arg(long)]
+        include_accepted: bool,
+        /// Also clean runs stuck non-terminal whose process is dead
+        /// (crash orphans).
+        #[arg(long)]
+        include_dead: bool,
+        #[arg(long)]
+        runs: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -137,6 +187,52 @@ async fn run() -> Result<(), WanaxError> {
         Commands::Doctor { fix_lock, strict } => doctor::run(fix_lock, strict, &data_dir).await,
         Commands::Verdict { run_id } => print_verdict(data_dir, run_id).await,
         Commands::Cost { run_id } => print_cost(data_dir, run_id).await,
+        Commands::Report { run_id, json, suggest } => {
+            report::run(data_dir, run_id, json, suggest).await
+        }
+        Commands::Improve {
+            contract,
+            allow_dirty,
+            adapter,
+            iterations,
+            from,
+            adapters,
+            max_total_usd,
+        } => {
+            let max_total_usd_micros = max_total_usd
+                .as_deref()
+                .map(|s| {
+                    wanax_core::money::parse_usd_decimal(s)
+                        .map_err(|e| WanaxError::new(ErrorCode::ContractInvalid, e))
+                })
+                .transpose()?;
+            engine::improve(engine::ImproveOpts {
+                contract,
+                allow_dirty,
+                adapter: adapter.map(Into::into),
+                data_dir,
+                iterations: iterations.unwrap_or(3),
+                from,
+                adapters: adapters.into_iter().map(Into::into).collect(),
+                max_total_usd_micros,
+            })
+            .await
+        }
+        Commands::Clean {
+            include_accepted,
+            include_dead,
+            runs,
+            dry_run,
+        } => {
+            clean::run(clean::CleanOpts {
+                data_dir,
+                include_accepted,
+                include_dead,
+                runs,
+                dry_run,
+            })
+            .await
+        }
     }
 }
 
