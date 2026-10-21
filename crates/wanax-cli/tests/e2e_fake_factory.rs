@@ -1867,6 +1867,27 @@ fn bound_test_blocks_vacuous_accept() {
     );
 }
 
+/// `wanax watch` polls to terminal state: exit 0 on accepted, exit 1
+/// on a non-accept terminal, timeout path is covered by a short bound.
+#[test]
+fn watch_polls_to_terminal() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    // Already-terminal run exits immediately with success.
+    let out = h.run(&["watch", &run_id, "--interval-secs", "1"], 0);
+    assert!(out.stdout.contains("accepted"), "{}", out.stdout);
+    // A nonexistent run id errors through get_run.
+    let out = h.run(&["watch", "wx_doesnotexist", "--interval-secs", "1"], 7);
+    assert!(out.stderr.contains("E_RUN_NOT_FOUND"), "{}", out.stderr);
+}
+
 /// `wanax diff` shows the inner branch diff — stat by default, --patch
 /// for the full unified diff.
 #[test]
