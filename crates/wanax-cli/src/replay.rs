@@ -384,4 +384,88 @@ mod tests {
         assert_eq!(d1.state, WorkUnitState::Accepted);
         assert_eq!(d2.state, WorkUnitState::Accepted);
     }
+
+    /// Repeated dispatch (rework) must not duplicate the unit — it updates.
+    #[test]
+    fn replay_duplicate_dispatch_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let rid = "wx_DUP";
+        init_envelope(dir.path(), rid, "sha", "dispatched",
+            ev(EventKind::RunStarted, json!({}))).unwrap();
+        for _ in 0..3 {
+            append_event(dir.path(), rid, "queued", ev(EventKind::UnitSeeded, json!({
+                "work_unit_id": "u1", "seq": 1, "title": "a", "instruction": "i"
+            }))).unwrap();
+            append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
+                "work_unit_id": "u1", "title": "a", "instruction": "i"
+            }))).unwrap();
+        }
+        let snap = envelope_snapshot(dir.path(), rid).unwrap();
+        assert_eq!(snap.units.len(), 1);
+        assert_eq!(snap.units[0].state, WorkUnitState::Implementing);
+    }
+
+    /// rework → re-dispatch → receipt → accept: the full recovery arc in
+    /// events must land on Accepted with rework_count preserved.
+    #[test]
+    fn replay_rework_cycle_lands_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let rid = "wx_REWORK";
+        init_envelope(dir.path(), rid, "sha", "dispatched",
+            ev(EventKind::RunStarted, json!({}))).unwrap();
+        append_event(dir.path(), rid, "queued", ev(EventKind::UnitSeeded, json!({
+            "work_unit_id": "u1", "seq": 1, "title": "a", "instruction": "i"
+        }))).unwrap();
+        for r in ["r1", "r2"] {
+            append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
+                "work_unit_id": "u1", "title": "a", "instruction": "i"
+            }))).unwrap();
+            append_event(dir.path(), rid, "queued", ev(EventKind::ReceiptSubmitted, json!({
+                "work_unit_id": "u1", "receipt_id": r, "commit_sha": "abc",
+                "changed_files": ["src/a.rs"]
+            }))).unwrap();
+            let d = if r == "r1" { "rework" } else { "accept" };
+            append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
+                "decision": d, "work_unit_id": "u1"
+            }))).unwrap();
+        }
+        let snap = envelope_snapshot(dir.path(), rid).unwrap();
+        assert_eq!(snap.units.len(), 1);
+        assert_eq!(snap.units[0].state, WorkUnitState::Accepted);
+        assert_eq!(snap.units[0].rework_count, 1);
+    }
+
+    /// Pre-feature envelopes lack the enriched fields — replay must degrade
+    /// gracefully (stub unit from dispatch alone) rather than crash.
+    #[test]
+    fn replay_old_envelope_minimal_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let rid = "wx_OLD";
+        init_envelope(dir.path(), rid, "sha", "dispatched",
+            ev(EventKind::RunStarted, json!({}))).unwrap();
+        append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
+            "work_unit_id": "u1"
+        }))).unwrap();
+        append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
+            "decision": "accept", "work_unit_id": "u1"
+        }))).unwrap();
+        let snap = envelope_snapshot(dir.path(), rid).unwrap();
+        assert_eq!(snap.units.len(), 1);
+        assert_eq!(snap.units[0].state, WorkUnitState::Accepted);
+    }
+
+    /// A verdict for a unit we never saw (corrupt/diverged envelope) must
+    /// not panic or synthesize phantom units.
+    #[test]
+    fn replay_verdict_for_unknown_unit_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let rid = "wx_ORPHAN";
+        init_envelope(dir.path(), rid, "sha", "dispatched",
+            ev(EventKind::RunStarted, json!({}))).unwrap();
+        append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
+            "decision": "accept", "work_unit_id": "ghost"
+        }))).unwrap();
+        // No unit events at all → replay yields nothing, caller falls back.
+        assert!(envelope_snapshot(dir.path(), rid).is_none());
+    }
 }

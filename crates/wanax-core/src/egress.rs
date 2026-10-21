@@ -227,13 +227,16 @@ async fn handle_conn(
         return Ok(());
     }
 
-    // Plain HTTP: absolute-form URI or Host header → host:80.
+    // Plain HTTP: absolute-form URI or Host header → host[:port].
     let host = if let Some(rest) = target.strip_prefix("http://") {
         rest.split('/').next().unwrap_or("")
     } else {
         header(&text, "Host").unwrap_or("")
     };
-    let host_only = host.split(':').next().unwrap_or("");
+    let (host_only, port) = match host.rsplit_once(':') {
+        Some((h, p)) if !h.contains(']') => (h, p.parse::<u16>().unwrap_or(80)),
+        _ => (host, 80),
+    };
     if host_only.is_empty() {
         sock.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
             .await?;
@@ -245,7 +248,7 @@ async fn handle_conn(
             .await?;
         return Ok(());
     }
-    let mut upstream = TcpStream::connect(format!("{host_only}:80")).await?;
+    let mut upstream = TcpStream::connect(format!("{host_only}:{port}")).await?;
     upstream.write_all(&head).await?;
     tokio::io::copy_bidirectional(&mut sock, &mut upstream).await?;
     Ok(())
@@ -307,6 +310,64 @@ mod tests {
         c.write_all(b"ping").await.unwrap();
         let n = c.read(&mut resp).await.unwrap();
         assert_eq!(&resp[..n], b"ping");
+    }
+
+    #[tokio::test]
+    async fn plain_http_forwards_to_allowlisted_host() {
+        // Upstream HTTP server that replies 200 to any request.
+        let up = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let up_port = up.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut s, _) = up.accept().await.unwrap();
+            let mut b = [0u8; 1024];
+            let _ = s.read(&mut b).await.unwrap();
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi")
+                .await
+                .unwrap();
+        });
+        // 127.0.0.1 is allowlisted → GET must reach the upstream and get 200.
+        let allow = EgressAllowlist::new(["127.0.0.1"]);
+        let proxy = EgressProxy::start(allow, Arc::new(|_| {})).await.unwrap();
+        let mut c = TcpStream::connect(format!("127.0.0.1:{}", proxy.port))
+            .await
+            .unwrap();
+        c.write_all(
+            format!("GET http://127.0.0.1:{up_port}/x HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut resp = [0u8; 512];
+        let n = c.read(&mut resp).await.unwrap();
+        let text = String::from_utf8_lossy(&resp[..n]);
+        assert!(text.contains("200") && text.contains("hi"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn deny_callback_fires_and_returns_403() {
+        let hits = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let hits2 = hits.clone();
+        let allow = EgressAllowlist::new(["api.anthropic.com"]);
+        let proxy = EgressProxy::start(
+            allow,
+            Arc::new(move |m: &str| hits2.lock().unwrap().push(m.to_string())),
+        )
+        .await
+        .unwrap();
+        let mut c = TcpStream::connect(format!("127.0.0.1:{}", proxy.port))
+            .await
+            .unwrap();
+        c.write_all(b"GET http://evil.com/ HTTP/1.1\r\nHost: evil.com\r\n\r\n")
+            .await
+            .unwrap();
+        let mut resp = [0u8; 256];
+        let n = c.read(&mut resp).await.unwrap();
+        assert!(String::from_utf8_lossy(&resp[..n]).contains("403"));
+        let got = hits.lock().unwrap().clone();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].contains("evil.com"));
+        // and the matched secret — the denial log — never carries a body.
+        assert!(!got[0].contains("hunter"));
     }
 
     #[tokio::test]

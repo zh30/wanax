@@ -13,6 +13,59 @@ use wanax_core::types::{FactoryRun, RunState};
 use wanax_core::Store;
 use wanax_tombstone::{load_envelope, EventKind};
 
+/// Per-contract fitness + failure-mode stats — RSI's actual question is
+/// "is this spec converging, and why not".
+#[derive(Default)]
+struct CStats {
+    finished: u32,
+    accepted: u32,
+    reworks: u32,
+    boundary: u32,
+    budget: u32,
+    vacuous_accepts: u32,
+    commander_schema: u32,
+    history: String,
+}
+
+/// Rule-based triage from per-contract stats — is the bottleneck the spec
+/// or the implementation. Pure: same stats → same hints.
+fn suggest_hints(by_contract: &HashMap<String, CStats>) -> Vec<String> {
+    let mut hints = Vec::new();
+    for (name, s) in by_contract {
+        if s.commander_schema > 0 {
+            hints.push(format!(
+                "{name}: commander output failed {}x — prefer a structured provider (json_mode) or claude_cli envelope",
+                s.commander_schema
+            ));
+        }
+        if s.boundary > 0 {
+            hints.push(format!(
+                "{name}: boundary violations in {} run(s) — allowed_globs may be too tight, or the instruction drifts past declared scope",
+                s.boundary
+            ));
+        }
+        if s.budget > 0 {
+            hints.push(format!(
+                "{name}: budget exhausted in {} run(s) — raise max_usd or split the intent into smaller units",
+                s.budget
+            ));
+        }
+        if s.vacuous_accepts > 0 {
+            hints.push(format!(
+                "{name}: {} accept(s) on an already-green baseline — completion criteria may be vacuous; require a test that flips red→green",
+                s.vacuous_accepts
+            ));
+        }
+        if s.accepted == 0 && s.reworks >= 3 * s.finished.max(1) {
+            hints.push(format!(
+                "{name}: heavy rework with zero accepts — the intent is likely ambiguous; narrow decisions and completion criteria"
+            ));
+        }
+    }
+    hints.sort();
+    hints
+}
+
 #[derive(Default)]
 struct Fitness {
     baseline_exit: Option<i64>,
@@ -224,19 +277,6 @@ pub async fn run(
             }
             let mut by_state: HashMap<String, u32> = HashMap::new();
             let mut errors: HashMap<String, u32> = HashMap::new();
-            // Per-contract fitness + failure-mode stats — RSI's actual
-            // question is "is this spec converging, and why not".
-            #[derive(Default)]
-            struct CStats {
-                finished: u32,
-                accepted: u32,
-                reworks: u32,
-                boundary: u32,
-                budget: u32,
-                vacuous_accepts: u32,
-                commander_schema: u32,
-                history: String,
-            }
             let mut by_contract: HashMap<String, CStats> = HashMap::new();
             let mut n_finished = 0u32;
             let mut n_accepted = 0u32;
@@ -380,42 +420,10 @@ pub async fn run(
                 println!("contract {c}");
             }
             if suggest {
-                let mut hints = Vec::new();
-                for (name, s) in &by_contract {
-                    if s.commander_schema > 0 {
-                        hints.push(format!(
-                            "{name}: commander output failed {}x — prefer a structured provider (json_mode) or claude_cli envelope",
-                            s.commander_schema
-                        ));
-                    }
-                    if s.boundary > 0 {
-                        hints.push(format!(
-                            "{name}: boundary violations in {} run(s) — allowed_globs may be too tight, or the instruction drifts past declared scope",
-                            s.boundary
-                        ));
-                    }
-                    if s.budget > 0 {
-                        hints.push(format!(
-                            "{name}: budget exhausted in {} run(s) — raise max_usd or split the intent into smaller units",
-                            s.budget
-                        ));
-                    }
-                    if s.vacuous_accepts > 0 {
-                        hints.push(format!(
-                            "{name}: {} accept(s) on an already-green baseline — completion criteria may be vacuous; require a test that flips red→green",
-                            s.vacuous_accepts
-                        ));
-                    }
-                    if s.accepted == 0 && s.reworks >= 3 * s.finished.max(1) {
-                        hints.push(format!(
-                            "{name}: heavy rework with zero accepts — the intent is likely ambiguous; narrow decisions and completion criteria"
-                        ));
-                    }
-                }
+                let hints = suggest_hints(&by_contract);
                 if hints.is_empty() {
                     println!("suggest: no recurring failure pattern detected");
                 } else {
-                    hints.sort();
                     for hint in hints {
                         println!("suggest {hint}");
                     }
@@ -424,4 +432,63 @@ pub async fn run(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stats(f: impl Fn(&mut CStats)) -> CStats {
+        let mut s = CStats::default();
+        f(&mut s);
+        s
+    }
+
+    #[test]
+    fn suggest_flags_boundary_repeats_and_vacuous() {
+        let mut m = HashMap::new();
+        m.insert(
+            "spec-a".to_string(),
+            stats(|s| {
+                s.finished = 2;
+                s.boundary = 2;
+                s.vacuous_accepts = 1;
+                s.accepted = 1;
+            }),
+        );
+        let hints = suggest_hints(&m);
+        assert!(hints.iter().any(|h| h.contains("boundary violations")));
+        assert!(hints.iter().any(|h| h.contains("vacuous")));
+        // sorted for deterministic output
+        let mut sorted = hints.clone();
+        sorted.sort();
+        assert_eq!(hints, sorted);
+    }
+
+    #[test]
+    fn suggest_flags_ambiguous_intent_on_rework_zero_accept() {
+        let mut m = HashMap::new();
+        m.insert(
+            "spec-b".to_string(),
+            stats(|s| {
+                s.finished = 2;
+                s.reworks = 7;
+            }),
+        );
+        let hints = suggest_hints(&m);
+        assert!(hints.iter().any(|h| h.contains("ambiguous")));
+    }
+
+    #[test]
+    fn suggest_quiet_on_healthy_contract() {
+        let mut m = HashMap::new();
+        m.insert(
+            "spec-c".to_string(),
+            stats(|s| {
+                s.finished = 3;
+                s.accepted = 3;
+            }),
+        );
+        assert!(suggest_hints(&m).is_empty());
+    }
 }

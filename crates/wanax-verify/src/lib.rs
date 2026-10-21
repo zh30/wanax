@@ -423,6 +423,53 @@ index 111..222 100644
         assert!(kinds.contains(&"hardcoded-credential"));
     }
 
+    #[test]
+    fn scan_tracks_lines_across_multiple_hunks_and_files() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+ let a = 1;
++let key = \"AKIAIOSFODNN7EXAMPLE\";
+@@ -40,1 +40,2 @@
+ fn old() {}
++let k2 = \"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\";
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,1 +1,2 @@
+ x
++password = 'totally-secret-16chars'
+";
+        let f = scan_diff_added(diff);
+        assert_eq!(f.len(), 3);
+        assert_eq!((f[0].path.as_str(), f[0].line, f[0].kind), ("a.rs", 2, "aws-access-key"));
+        assert_eq!((f[1].path.as_str(), f[1].line, f[1].kind), ("a.rs", 41, "github-token"));
+        assert_eq!((f[2].path.as_str(), f[2].kind), ("b.rs", "hardcoded-credential"));
+    }
+
+    #[test]
+    fn scan_handles_new_deleted_and_no_newline_files() {
+        // new file: --- /dev/null ; deleted file: +++ /dev/null (no adds count)
+        let diff = "\
+diff --git a/old.rs b/old.rs
+--- a/old.rs
++++ /dev/null
+@@ -1,1 +0,0 @@
+-secret = \"AKIAIOSFODNN7EXAMPLE\"
+diff --git a/new.rs b/new.rs
+--- /dev/null
++++ b/new.rs
+@@ -0,0 +1,2 @@
++const K: &str = \"AKIAIOSFODNN7EXAMPLE\";
++\\ No newline at end of file
+";
+        let f = scan_diff_added(diff);
+        assert_eq!(f.len(), 1);
+        assert_eq!((f[0].path.as_str(), f[0].line), ("new.rs", 1));
+    }
+
     /// A spawned test harness must not see the wanax process's secrets.
     #[test]
     fn test_env_does_not_leak_parent_vars() {
