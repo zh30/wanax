@@ -309,7 +309,7 @@ wanax clean --include-dead       # also reclaim crash-orphan runs (non-terminal,
 | `wanax init [--force]` | Create `.wanax/` and an example contract |
 | `wanax start --contract <path> [--adapter octoscode\|fake\|cmd\|claude\|codex\|acp] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
 | `wanax resume [run_id]` | Continue an interrupted non-terminal run (takes over a stale LOCK) |
-| `wanax status [run_id]` | State, spend, current unit, last event |
+| `wanax status [run_id] [--json]` | State, spend, current unit, last event |
 | `wanax cost [run_id]` | Local spend board from SQLite / tombstone ticks (no network) |
 | `wanax cancel <run_id>` | SIGTERM the worker, keep the tombstone, release the lock |
 | `wanax verdict <run_id>` | Print the last outer verdict |

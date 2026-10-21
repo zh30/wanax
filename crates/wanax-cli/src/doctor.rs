@@ -60,6 +60,16 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
                 Err(_) => println!("adapter {bin}: {}", crate::i18n::t("adapter_missing")),
             }
         }
+        "acp" => {
+            let bin = cfg
+                .as_ref()
+                .map(|c| c.file.worker.acp_bin.as_str())
+                .unwrap_or("claude-code-acp");
+            match wanax_worker::resolve_cmd_bin(bin) {
+                Ok(_) => println!("adapter {bin}: {}", crate::i18n::t("adapter_ok")),
+                Err(_) => println!("adapter {bin}: {}", crate::i18n::t("adapter_missing")),
+            }
+        }
         _ => {
             let adapter_bin = cfg
                 .as_ref()
