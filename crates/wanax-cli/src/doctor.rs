@@ -188,6 +188,15 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         }
     }
 
+    let sandbox_mode = cfg
+        .as_ref()
+        .map(|c| c.file.sandbox.mode.as_str())
+        .unwrap_or("auto");
+    println!(
+        "sandbox: {}",
+        wanax_core::sandbox::detect_backend(sandbox_mode).as_str()
+    );
+
     if let Some(cfg) = &cfg {
         if cfg
             .file

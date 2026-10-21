@@ -32,6 +32,7 @@ pub enum ErrorCode {
     Plugin,
     Rejected,
     Escalated,
+    SecretLeak,
 }
 
 impl ErrorCode {
@@ -66,6 +67,7 @@ impl ErrorCode {
             Self::Plugin => "E_PLUGIN",
             Self::Rejected => "E_REJECTED",
             Self::Escalated => "E_ESCALATE",
+            Self::SecretLeak => "E_SECRET_LEAK",
         }
     }
 
@@ -116,6 +118,7 @@ impl ErrorCode {
             Self::Plugin => "verifier plugin failed",
             Self::Rejected => "verdict rejected",
             Self::Escalated => "escalated to human",
+            Self::SecretLeak => "secret material detected in diff",
         }
     }
 }

@@ -231,6 +231,18 @@ pub fn diff_name_only(repo: &Path, a: &str, b: &str) -> Result<Vec<String>, Wana
         .collect())
 }
 
+/// Full `a..b` diff text (capped — the scanner only needs added lines).
+pub fn diff_patch(repo: &Path, a: &str, b: &str) -> Result<String, WanaxError> {
+    const CAP: usize = 2 * 1024 * 1024;
+    let spec = format!("{a}..{b}");
+    let s = run_git_ok(repo, &["diff", "--no-color", &spec])?;
+    if s.len() > CAP {
+        Ok(s.chars().take(CAP).collect())
+    } else {
+        Ok(s)
+    }
+}
+
 pub fn diff_stat(repo: &Path, a: &str, b: &str) -> Result<String, WanaxError> {
     let spec = format!("{a}..{b}");
     let s = run_git_ok(repo, &["diff", "--stat", &spec])?;

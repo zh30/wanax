@@ -15,6 +15,9 @@ pub struct AcceptGates {
     /// Every `bound_test:` criterion's named test exists and passes in the
     /// outer worktree — completion criteria made mechanical.
     pub bound_tests_ok: bool,
+    /// No high-signal secret shapes in the diff's added lines — path globs
+    /// can't see content; a committed key is a leak even inside `src/**`.
+    pub secrets_ok: bool,
 }
 
 impl AcceptGates {
@@ -38,6 +41,7 @@ impl AcceptGates {
             rework_count,
             plugin_ok: true,
             bound_tests_ok: true,
+            secrets_ok: true,
         }
     }
 
@@ -51,6 +55,11 @@ impl AcceptGates {
         self
     }
 
+    pub fn with_secrets(mut self, ok: bool) -> Self {
+        self.secrets_ok = ok;
+        self
+    }
+
     pub fn can_accept(&self) -> bool {
         self.outer_test_exit_code == 0
             && self.boundary_ok
@@ -61,6 +70,7 @@ impl AcceptGates {
             && self.rework_count <= MAX_REWORK
             && self.plugin_ok
             && self.bound_tests_ok
+            && self.secrets_ok
     }
 }
 
@@ -83,6 +93,9 @@ pub fn enforce_decision(
         if !gates.boundary_ok {
             decision = VerdictDecision::Reject;
             note = Some(note.unwrap_or(ErrorCode::Boundary));
+        } else if !gates.secrets_ok {
+            decision = VerdictDecision::Reject;
+            note = Some(note.unwrap_or(ErrorCode::SecretLeak));
         } else if !gates.changed_files_nonempty
             || gates.receipt_test_command != gates.contract_test_command
             || !gates.inner_is_descendant

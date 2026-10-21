@@ -65,7 +65,7 @@ Do not accept, merge, or claim outer verdict. Do not write files.";
         "test_exit_code={test_exit_code}\nfiles:\n{}\nexcerpt:\n{excerpt}\n",
         changed.join("\n")
     );
-    match client.complete(system, &user, model).await {
+    match client.complete(system, &user, model, true).await {
         Ok(completion) => GoalSelfReview {
             degraded: false,
             mode: "semantic",
@@ -76,6 +76,7 @@ Do not accept, merge, or claim outer verdict. Do not write files.";
                 prompt_tokens: completion.prompt_tokens,
                 completion_tokens: completion.completion_tokens,
                 raw_json: completion.text,
+                usd_micros: None,
             }),
         },
         Err(_) => mechanical_self_review(changed, test_exit_code),

@@ -316,6 +316,15 @@ impl Store {
         Ok(())
     }
 
+    pub async fn get_work_unit(&self, id: &str) -> Result<WorkUnit, WanaxError> {
+        let row = sqlx::query("SELECT * FROM work_units WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| WanaxError::from_code(ErrorCode::RunNotFound))?;
+        row_to_unit(row)
+    }
+
     pub async fn update_work_unit(&self, u: &WorkUnit) -> Result<(), WanaxError> {
         sqlx::query(
             r#"UPDATE work_units SET title=?, instruction=?, state=?, assignee_role=?,

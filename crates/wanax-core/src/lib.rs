@@ -3,6 +3,7 @@ pub mod budget;
 pub mod config;
 pub mod contract;
 pub mod dag;
+pub mod egress;
 pub mod envenv;
 pub mod error;
 pub mod glob_overlap;

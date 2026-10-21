@@ -8,6 +8,7 @@ description = "Boundary glob checks and isolated test runner"
 
 [dependencies]
 globset.workspace = true
+regex.workspace = true
 wanax-core.workspace = true
 
 [dev-dependencies]

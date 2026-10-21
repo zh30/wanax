@@ -17,6 +17,24 @@ pub(crate) const VERDICT_SYSTEM: &str = "You are the Wanax commander. Reply with
 {\"decision\":\"accept|reject|rework|escalate\",\"reason\":\"...\",\"files_reviewed\":[\"...\"]}. \
 Do not accept if outer tests failed or boundaries were violated. Do not write repository files.";
 
+pub(crate) fn verdict_user(ctx: &VerdictContext) -> String {
+    let baseline = ctx
+        .baseline_test_exit_code
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "n/a".into());
+    format!(
+        "baseline_test_exit_code={baseline}\nouter_test_exit_code={}\nboundary_ok={}\nclaimed_pass={}\nrework_count={}\n\
+changed_files:\n{}\n\ndiffstat:\n{}\n\nexcerpt:\n{}\n",
+        ctx.outer_test_exit_code,
+        ctx.boundary_ok,
+        ctx.receipt.claimed_pass,
+        ctx.rework_count,
+        ctx.changed_files.join("\n"),
+        ctx.diffstat,
+        ctx.outer_test_excerpt
+    )
+}
+
 pub struct HttpCommander {
     client: Arc<dyn CompletionClient>,
     model: String,
@@ -37,6 +55,7 @@ impl HttpCommander {
             prompt_tokens: completion.prompt_tokens,
             completion_tokens: completion.completion_tokens,
             raw_json,
+            usd_micros: None,
         }
     }
 }
@@ -50,7 +69,7 @@ impl Commander for HttpCommander {
         let user = crate::format_dispatch_instruction(ctx);
         let completion = self
             .client
-            .complete(DISPATCH_SYSTEM, &user, &self.model)
+            .complete(DISPATCH_SYSTEM, &user, &self.model, true)
             .await?;
         let json = extract_json_object(&completion.text)
             .ok_or_else(|| WanaxError::from_code(ErrorCode::CommanderSchema))?;
@@ -62,20 +81,10 @@ impl Commander for HttpCommander {
     }
 
     async fn verdict(&self, ctx: &VerdictContext) -> Result<(VerdictDraft, LlmUsage), WanaxError> {
-        let user = format!(
-            "outer_test_exit_code={}\nboundary_ok={}\nclaimed_pass={}\nrework_count={}\n\
-changed_files:\n{}\n\ndiffstat:\n{}\n\nexcerpt:\n{}\n",
-            ctx.outer_test_exit_code,
-            ctx.boundary_ok,
-            ctx.receipt.claimed_pass,
-            ctx.rework_count,
-            ctx.changed_files.join("\n"),
-            ctx.diffstat,
-            ctx.outer_test_excerpt
-        );
+        let user = verdict_user(ctx);
         let completion = self
             .client
-            .complete(VERDICT_SYSTEM, &user, &self.model)
+            .complete(VERDICT_SYSTEM, &user, &self.model, true)
             .await?;
         let json = extract_json_object(&completion.text)
             .ok_or_else(|| WanaxError::from_code(ErrorCode::CommanderSchema))?;
@@ -132,6 +141,7 @@ mod tests {
                 agent_spec: None,
             },
             rework_notes: None,
+            rsi_notes: None,
         };
         let (plan, usage) = cmd.dispatch_plan(&ctx).await.unwrap();
         let DispatchPlan::Single(draft) = plan else {

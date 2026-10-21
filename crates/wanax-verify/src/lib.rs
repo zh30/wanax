@@ -44,6 +44,110 @@ pub fn is_factory_meta(path: &str) -> bool {
     path.starts_with(".wanax/runs/") || path.starts_with(".wanax/worktrees/")
 }
 
+// ---- content-level secret scan -------------------------------------------
+//
+// Path boundaries (forbidden_globs) can't see CONTENT: a worker writing an
+// API key into src/config.rs passes every glob check. Scan the added lines
+// of the accepted diff for high-signal secret shapes so the accept gate
+// blocks the leak before it lands in git history.
+
+#[derive(Debug, Clone)]
+pub struct SecretFinding {
+    pub path: String,
+    pub line: u32,
+    /// Pattern class label only — the matched secret itself is never stored.
+    pub kind: &'static str,
+}
+
+const SECRET_RULES: &[(&str, &str)] = &[
+    ("aws-access-key", r"AKIA[0-9A-Z]{16}"),
+    (
+        "private-key-block",
+        r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY",
+    ),
+    (
+        "github-token",
+        r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}",
+    ),
+    ("openai-key", r"sk-[A-Za-z0-9_-]{20,}"),
+    (
+        "stripe-live-key",
+        r"(?:sk|rk)_live_[0-9a-zA-Z]{16,}|whsec_[A-Za-z0-9]{16,}",
+    ),
+    ("slack-token", r"xox[baprs]-[0-9A-Za-z-]{10,}"),
+    ("google-api-key", r"AIza[0-9A-Za-z_-]{35}"),
+    (
+        "jwt",
+        r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+    ),
+    (
+        "hardcoded-credential",
+        r#"(?i)(?:api[_-]?key|secret[_-]?key|password|passwd|access[_-]?token|auth[_-]?token)\s*[:=]\s*["'][0-9A-Za-z_\-+/=.]{16,}["']"#,
+    ),
+];
+
+fn secret_patterns() -> &'static [(regex::Regex, &'static str)] {
+    use std::sync::OnceLock;
+    static PATTERNS: OnceLock<Vec<(regex::Regex, &'static str)>> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        SECRET_RULES
+            .iter()
+            .map(|(kind, pat)| {
+                (regex::Regex::new(pat).expect("secret regex compiles"), *kind)
+            })
+            .collect()
+    })
+}
+
+/// Scan the ADDED lines of a unified diff for high-signal secret shapes.
+/// Returns findings with file + new-file line numbers — never the secret.
+pub fn scan_diff_added(diff: &str) -> Vec<SecretFinding> {
+    let patterns = secret_patterns();
+    let mut out = Vec::new();
+    let mut path = String::new();
+    let mut new_line: u32 = 0;
+    let mut in_hunk = false;
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("+++ ") {
+            path = rest
+                .trim()
+                .strip_prefix("b/")
+                .unwrap_or(rest.trim())
+                .to_string();
+            in_hunk = false;
+        } else if let Some(h) = line.strip_prefix("@@ ") {
+            // @@ -a,b +c,d @@ → new-file lines start at c
+            if let Some(plus) = h.split('+').nth(1) {
+                new_line = plus
+                    .split([',', ' '])
+                    .next()
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0);
+            }
+            in_hunk = true;
+        } else if in_hunk {
+            if let Some(added) = line.strip_prefix('+') {
+                for (re, kind) in patterns {
+                    if re.is_match(added) {
+                        out.push(SecretFinding {
+                            path: path.clone(),
+                            line: new_line,
+                            kind,
+                        });
+                        break;
+                    }
+                }
+                new_line += 1;
+            } else if line.starts_with('-') || line.starts_with('\\') {
+                // removed context or "no newline" marker: no new-line advance
+            } else {
+                new_line += 1; // context line
+            }
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct BoundaryReport {
     pub ok: bool,
@@ -269,6 +373,101 @@ mod tests {
         )
         .unwrap();
         assert!(!r.ok);
+    }
+
+    #[test]
+    fn scan_finds_keys_only_in_added_lines() {
+        let diff = "\
+diff --git a/src/cfg.rs b/src/cfg.rs
+index 111..222 100644
+--- a/src/cfg.rs
++++ b/src/cfg.rs
+@@ -10,3 +10,4 @@
+ let a = 1;
+-let old = 2;
++let key = \"sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ12\";
++let note = \"ok\";
+";
+        let f = scan_diff_added(diff);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].kind, "openai-key");
+        assert_eq!(f[0].path, "src/cfg.rs");
+        assert_eq!(f[0].line, 11);
+    }
+
+    #[test]
+    fn scan_ignores_removed_lines_and_clean_code() {
+        let diff = "\
+--- a/src/cfg.rs
++++ b/src/cfg.rs
+@@ -1,3 +1,3 @@
+-const GONE: &str = \"AKIAIOSFODNN7EXAMPLE\";
++pub fn add(a: i32, b: i32) -> i32 { a + b }
++#[test] fn t() { assert_eq!(add(1,2),3); }
+";
+        assert!(scan_diff_added(diff).is_empty());
+    }
+
+    #[test]
+    fn scan_flags_private_key_and_hardcoded_creds() {
+        let diff = "\
++++ b/keys.txt
+@@ -0,0 +1,3 @@
++-----BEGIN PRIVATE KEY-----
++aws = \"AKIAIOSFODNN7EXAMPLE\"
++password = \"hunter2-hunter2-hunter2\"
+";
+        let kinds: Vec<_> = scan_diff_added(diff).iter().map(|f| f.kind).collect();
+        assert!(kinds.contains(&"private-key-block"));
+        assert!(kinds.contains(&"aws-access-key"));
+        assert!(kinds.contains(&"hardcoded-credential"));
+    }
+
+    #[test]
+    fn scan_tracks_lines_across_multiple_hunks_and_files() {
+        let diff = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+ let a = 1;
++let key = \"AKIAIOSFODNN7EXAMPLE\";
+@@ -40,1 +40,2 @@
+ fn old() {}
++let k2 = \"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\";
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,1 +1,2 @@
+ x
++password = 'totally-secret-16chars'
+";
+        let f = scan_diff_added(diff);
+        assert_eq!(f.len(), 3);
+        assert_eq!((f[0].path.as_str(), f[0].line, f[0].kind), ("a.rs", 2, "aws-access-key"));
+        assert_eq!((f[1].path.as_str(), f[1].line, f[1].kind), ("a.rs", 41, "github-token"));
+        assert_eq!((f[2].path.as_str(), f[2].kind), ("b.rs", "hardcoded-credential"));
+    }
+
+    #[test]
+    fn scan_handles_new_deleted_and_no_newline_files() {
+        // new file: --- /dev/null ; deleted file: +++ /dev/null (no adds count)
+        let diff = "\
+diff --git a/old.rs b/old.rs
+--- a/old.rs
++++ /dev/null
+@@ -1,1 +0,0 @@
+-secret = \"AKIAIOSFODNN7EXAMPLE\"
+diff --git a/new.rs b/new.rs
+--- /dev/null
++++ b/new.rs
+@@ -0,0 +1,2 @@
++const K: &str = \"AKIAIOSFODNN7EXAMPLE\";
++\\ No newline at end of file
+";
+        let f = scan_diff_added(diff);
+        assert_eq!(f.len(), 1);
+        assert_eq!((f[0].path.as_str(), f[0].line), ("new.rs", 1));
     }
 
     /// A spawned test harness must not see the wanax process's secrets.
