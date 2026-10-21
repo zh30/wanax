@@ -4,11 +4,13 @@ pub mod plugin;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 pub use peer::{find_peer_overlap, peer_glob_sets_overlap};
 pub use plugin::{run_verifier_plugins, PluginReport};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use wanax_core::error::{ErrorCode, WanaxError};
+use wanax_core::sandbox::{self, SandboxSpec};
 
 pub fn compile_globs(patterns: &[String]) -> Result<GlobSet, WanaxError> {
     let mut b = GlobSetBuilder::new();
@@ -92,22 +94,41 @@ pub struct TestRunResult {
     pub duration_ms: u64,
 }
 
-/// Run `test_command` in `cwd`. Timeout → exit_code 124.
+/// Run `test_command` in `cwd` with a sanitized environment (never the wanax
+/// process env — spawned test code can otherwise read `WANAX_*_API_KEY` and
+/// exfiltrate it through stdout into tombstones and commander prompts).
+/// Timeout → SIGKILL to the whole process group, exit_code 124.
 pub fn run_test_command(
     cwd: &Path,
     test_command: &str,
     timeout_secs: u32,
+    env: &HashMap<String, String>,
+    sandbox_spec: Option<&SandboxSpec>,
 ) -> Result<TestRunResult, WanaxError> {
     let started = Instant::now();
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(test_command)
+    let args = vec!["-c".to_string(), test_command.to_string()];
+    let (prog, argv) = match sandbox_spec {
+        Some(spec) => sandbox::wrap(spec, Path::new("/bin/sh"), &args)?,
+        None => (PathBuf::from("/bin/sh"), args),
+    };
+    let mut command = Command::new(prog);
+    command
+        .args(&argv)
         .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .env_clear()
+        .envs(env)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
+    let child_pid = child.id();
 
     let mut stdout = child
         .stdout
@@ -134,7 +155,7 @@ pub fn run_test_command(
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if started.elapsed() > timeout {
-                    let _ = child.kill();
+                    kill_tree(child_pid);
                     let _ = child.wait();
                     let _ = stdout_h.join();
                     let _ = stderr_h.join();
@@ -164,6 +185,20 @@ pub fn run_test_command(
         timed_out: false,
         duration_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+/// Kill the whole process group led by `pid`, falling back to the single
+/// process. Children were spawned with `process_group(0)` so pgid == pid.
+fn kill_tree(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .status();
+    }
+    let _ = Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status();
 }
 
 fn tail_chars(s: &str, max: usize) -> String {
@@ -234,5 +269,27 @@ mod tests {
         )
         .unwrap();
         assert!(!r.ok);
+    }
+
+    /// A spawned test harness must not see the wanax process's secrets.
+    #[test]
+    fn test_env_does_not_leak_parent_vars() {
+        std::env::set_var("WANAX_COMMANDER_API_KEY", "sk-leak");
+        let dir = tempfile::tempdir().unwrap();
+        let env = wanax_core::envenv::base_child_env();
+        let r = run_test_command(
+            dir.path(),
+            "printf %s \"$WANAX_COMMANDER_API_KEY\" > leak.txt",
+            30,
+            &env,
+            None,
+        )
+        .unwrap();
+        std::env::remove_var("WANAX_COMMANDER_API_KEY");
+        assert_eq!(r.exit_code, 0, "{}", r.excerpt);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("leak.txt")).unwrap(),
+            ""
+        );
     }
 }

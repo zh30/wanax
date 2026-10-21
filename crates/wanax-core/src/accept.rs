@@ -12,6 +12,9 @@ pub struct AcceptGates {
     pub budget_exhausted: bool,
     pub rework_count: u32,
     pub plugin_ok: bool,
+    /// Every `bound_test:` criterion's named test exists and passes in the
+    /// outer worktree — completion criteria made mechanical.
+    pub bound_tests_ok: bool,
 }
 
 impl AcceptGates {
@@ -34,11 +37,17 @@ impl AcceptGates {
             budget_exhausted,
             rework_count,
             plugin_ok: true,
+            bound_tests_ok: true,
         }
     }
 
     pub fn with_plugin(mut self, ok: bool) -> Self {
         self.plugin_ok = ok;
+        self
+    }
+
+    pub fn with_bound_tests(mut self, ok: bool) -> Self {
+        self.bound_tests_ok = ok;
         self
     }
 
@@ -51,6 +60,7 @@ impl AcceptGates {
             && !self.budget_exhausted
             && self.rework_count <= MAX_REWORK
             && self.plugin_ok
+            && self.bound_tests_ok
     }
 }
 
@@ -78,6 +88,8 @@ pub fn enforce_decision(
             || !gates.inner_is_descendant
         {
             decision = VerdictDecision::Reject;
+        } else if !gates.bound_tests_ok {
+            decision = VerdictDecision::Rework;
         } else if !gates.plugin_ok {
             decision = VerdictDecision::Rework;
             note = Some(ErrorCode::Plugin);

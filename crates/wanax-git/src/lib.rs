@@ -79,6 +79,13 @@ pub fn repo_root(path: &Path) -> Result<PathBuf, WanaxError> {
     Ok(PathBuf::from(s))
 }
 
+/// Absolute path of the shared git dir (worktree metadata lives under it).
+pub fn git_common_dir(repo: &Path) -> Result<PathBuf, WanaxError> {
+    let s = run_git_ok(repo, &["rev-parse", "--git-common-dir"])?;
+    let p = PathBuf::from(&s);
+    Ok(if p.is_absolute() { p } else { repo.join(p) })
+}
+
 /// Uncommitted paths that are not under `.wanax/`.
 pub fn dirty_non_wanax(repo: &Path) -> Result<Vec<String>, WanaxError> {
     Ok(status_paths(repo)?
@@ -89,6 +96,28 @@ pub fn dirty_non_wanax(repo: &Path) -> Result<Vec<String>, WanaxError> {
 
 pub fn create_branch(repo: &Path, name: &str, start_sha: &str) -> Result<(), WanaxError> {
     run_git_ok(repo, &["branch", name, start_sha])?;
+    Ok(())
+}
+
+/// Force an existing branch back to `start_sha` (retry-safe peer setup).
+pub fn reset_branch(repo: &Path, name: &str, start_sha: &str) -> Result<(), WanaxError> {
+    run_git_ok(repo, &["branch", "-f", name, start_sha])?;
+    Ok(())
+}
+
+/// Remove a worktree, tolerating a half-registered or dirty tree.
+pub fn worktree_remove_force(repo: &Path, worktree: &Path) -> Result<(), WanaxError> {
+    let ok = run_git_ok(
+        repo,
+        &["worktree", "remove", "--force", worktree.to_str().unwrap_or(".")],
+    );
+    if ok.is_err() {
+        let _ = fs::remove_dir_all(worktree);
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(repo)
+            .status();
+    }
     Ok(())
 }
 
@@ -120,9 +149,23 @@ pub fn worktree_add_detach(repo: &Path, worktree: &Path, sha: &str) -> Result<()
     Ok(())
 }
 
-pub fn harden_inner_worktree(worktree: &Path) -> Result<(), WanaxError> {
-    let _ = run_git_ok(worktree, &["config", "--local", "credential.helper", ""]);
-    let _ = run_git_ok(worktree, &["config", "--local", "commit.gpgsign", "false"]);
+/// Write the process-scoped gitconfig used by spawned children
+/// (`GIT_CONFIG_GLOBAL`). Disables credential helpers and commit signing for
+/// worker/test/commander processes WITHOUT touching the repository's shared
+/// `.git/config` (`git config --local` inside a linked worktree writes the
+/// main checkout's config — do not reintroduce it).
+pub fn prepare_worker_gitconfig(repo: &Path) -> Result<PathBuf, WanaxError> {
+    let dir = repo.join(".wanax");
+    fs::create_dir_all(&dir).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
+    let path = dir.join("gitconfig");
+    let body = "[credential]\n\thelper =\n[commit]\n\tgpgsign = false\n[user]\n\tname = wanax\n\temail = wanax@local\n";
+    fs::write(&path, body).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
+    Ok(path)
+}
+
+/// Kept for call-site clarity: linked worktrees need no repo-level mutation.
+/// Confinement lives in `GIT_CONFIG_GLOBAL` (env) and the sandbox profile.
+pub fn harden_inner_worktree(_worktree: &Path) -> Result<(), WanaxError> {
     Ok(())
 }
 
@@ -219,6 +262,13 @@ pub fn cherry_pick(worktree: &Path, sha: &str) -> Result<(), WanaxError> {
         ErrorCode::Db,
         format!("cherry-pick conflict merging peer commit {sha}"),
     ))
+}
+
+/// Hard-reset a worktree's checked-out branch to `sha` (rework rollback:
+/// discards a failed wave merge before the next attempt re-merges).
+pub fn reset_hard(worktree: &Path, sha: &str) -> Result<(), WanaxError> {
+    run_git_ok(worktree, &["reset", "--hard", sha])?;
+    Ok(())
 }
 
 pub fn checkout_branch(worktree: &Path, branch: &str) -> Result<(), WanaxError> {
