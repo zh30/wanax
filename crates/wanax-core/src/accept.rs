@@ -18,6 +18,9 @@ pub struct AcceptGates {
     /// No high-signal secret shapes in the diff's added lines — path globs
     /// can't see content; a committed key is a leak even inside `src/**`.
     pub secrets_ok: bool,
+    /// Every `must_have:` file named by completion criteria appears in the
+    /// diff — "add module X" that never creates X fails mechanically.
+    pub must_have_ok: bool,
 }
 
 impl AcceptGates {
@@ -42,6 +45,7 @@ impl AcceptGates {
             plugin_ok: true,
             bound_tests_ok: true,
             secrets_ok: true,
+            must_have_ok: true,
         }
     }
 
@@ -60,6 +64,11 @@ impl AcceptGates {
         self
     }
 
+    pub fn with_must_have(mut self, ok: bool) -> Self {
+        self.must_have_ok = ok;
+        self
+    }
+
     pub fn can_accept(&self) -> bool {
         self.outer_test_exit_code == 0
             && self.boundary_ok
@@ -71,6 +80,7 @@ impl AcceptGates {
             && self.plugin_ok
             && self.bound_tests_ok
             && self.secrets_ok
+            && self.must_have_ok
     }
 }
 
@@ -101,7 +111,7 @@ pub fn enforce_decision(
             || !gates.inner_is_descendant
         {
             decision = VerdictDecision::Reject;
-        } else if !gates.bound_tests_ok {
+        } else if !gates.bound_tests_ok || !gates.must_have_ok {
             decision = VerdictDecision::Rework;
         } else if !gates.plugin_ok {
             decision = VerdictDecision::Rework;

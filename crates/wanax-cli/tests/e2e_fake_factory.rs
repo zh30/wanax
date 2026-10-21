@@ -1867,6 +1867,108 @@ fn bound_test_blocks_vacuous_accept() {
     );
 }
 
+/// must_have criteria are mechanical: "add module X" that never creates
+/// X is enforced down to rework even when tests are green.
+#[test]
+fn must_have_blocks_incomplete_accept() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let mut body = contract("src/**");
+    body = body.replace(
+        "- CC-01: cargo test exits 0",
+        "- CC-01: cargo test exits 0\n- CC-02: new module exists (must_have: `src/new.rs`)",
+    );
+    h.write_contract(&body);
+    // The worker fixes lib.rs but never creates src/new.rs.
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        1,
+    );
+    assert!(out.stdout.contains("state=escalate"), "{}", out.stdout);
+    let env = h.envelope();
+    let mh = env["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "must_have")
+        .expect("must_have event");
+    assert!(
+        mh["payload"]["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m.as_str().unwrap_or("").contains("src/new.rs")),
+        "{env}"
+    );
+    assert!(
+        env["events"].as_array().unwrap().iter().any(|e| e["kind"]
+            == "verdict"
+            && e["payload"]["decision"] == "rework"),
+        "{env}"
+    );
+}
+
+/// And the positive: a worker that creates the must_have file accepts.
+#[test]
+fn must_have_accepts_when_file_created() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let mut body = contract("src/**");
+    body = body.replace(
+        "- CC-01: cargo test exits 0",
+        "- CC-01: cargo test exits 0 (must_have: `src/new.rs`)",
+    );
+    h.write_contract(&body);
+    h.write_fake(&format!(
+        "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}'''\n\n[[writes]]\npath = \"src/new.rs\"\ncontent = '''pub fn new_mod() -> i32 {{ 7 }}\n'''\n"
+    ));
+    let out = h.run(
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
+    // No must_have failure event when the criterion is satisfied.
+    let env = h.envelope();
+    assert!(
+        !env["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "must_have"),
+        "{env}"
+    );
+}
+
+/// `wanax check` fails a must_have the worker can't write (outside
+/// allowed_globs = impossible contract), and warns on glob forms.
+#[test]
+fn check_fails_must_have_outside_allowed() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let mut body = contract("src/**");
+    body = body.replace(
+        "- CC-01: cargo test exits 0",
+        "- CC-01: cargo test exits 0\n- CC-02: docs exist (must_have: `docs/spec.md`)",
+    );
+    h.write_contract(&body);
+    let out = h.run(&["check", "--contract", "specs/add.contract.md"], 4);
+    assert!(out.stdout.contains("must"), "{}", out.stdout);
+    assert!(out.stdout.contains("cannot create"), "{}", out.stdout);
+}
+
 /// And the positive: a bound test that exists and passes accepts cleanly.
 #[test]
 fn bound_test_accepts_when_test_exists() {

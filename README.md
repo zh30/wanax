@@ -133,13 +133,19 @@ Add the missing `add` function so the unit test passes.
 
 - CC-01: `cargo test` exits 0
 - CC-02: the bound test exists and passes (bound_test: `test_add`)
+- CC-03: the new module exists (must_have: `src/new.rs`)
 ```
 
 `bound_test:` makes a criterion mechanical: the outer worktree runs
 `<test_command> -- --list` (cargo) to prove the named test exists — a filter
 matching nothing cannot pass vacuously — then `<test_command> <name>
--- --exact` must exit 0, or the accept gate forces rework. A missing test
-command, empty allow-list, or empty criteria is `E_CONTRACT_INVALID`.
+-- --exact` must exit 0, or the accept gate forces rework.
+
+`must_have:` names files (literal path or glob) the solution must produce:
+every pattern must match at least one file in the diff, or the accept gate
+forces rework. A literal `must_have` outside `allowed_globs` is an impossible
+contract — `wanax check` fails it up front. A missing test command, empty
+allow-list, or empty criteria is `E_CONTRACT_INVALID`.
 Dangerous `test_command` values (`rm`, `sudo`, `curl |`, …) are
 `E_TEST_COMMAND_FORBIDDEN`.
 
