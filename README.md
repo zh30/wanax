@@ -306,6 +306,7 @@ wanax clean --include-dead       # also reclaim crash-orphan runs (non-terminal,
 | `wanax improve --contract <path> [--iterations N]` | RSI loop: rerun with evidence carried across iterations |
 | `wanax check --contract <path>` | Mechanical contract preflight: bound_test names vs `cargo test -- --list`, glob coverage, vacuous-green traps, adapter availability. Exit 4 on FAIL |
 | `wanax audit <run_id>` | Tombstone integrity: per-event payload_sha256, sequence/id invariants, terminal-state evidence, DB cross-check. Exit non-zero on FAIL |
+| `wanax export <run_id> [--out <dir>]` | Bundle audit evidence — tombstone, frozen contract, `inner.diff`, replayed state, LEARNINGS, manifest — into `.wanax/exports/<run_id>/` |
 | `wanax clean [--dry-run] [--runs] [--include-accepted]` | Remove finished-run worktrees and branches |
 | `wanax doctor [--strict] [--fix-lock]` | Git, adapter, keys (presence only), stale lock, sandbox, disk |
 

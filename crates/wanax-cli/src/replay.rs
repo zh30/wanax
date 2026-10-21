@@ -14,7 +14,7 @@ use wanax_tombstone::{load_envelope, EventKind};
 
 /// The receipt fields replay needs to resume an interrupted outer review.
 /// Bulk text (excerpt/diffstat) still comes from the DB row when present.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ReceiptStub {
     pub receipt_id: String,
     pub work_unit_id: String,
@@ -24,7 +24,7 @@ pub struct ReceiptStub {
     pub claimed_pass: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ReplayOutcome {
     /// All units in dispatch order, with replayed state/rework counts.
     pub units: Vec<WorkUnit>,

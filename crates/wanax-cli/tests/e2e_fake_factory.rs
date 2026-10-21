@@ -1981,6 +1981,40 @@ fn egress_isolated_denies_all_network() {
     assert!(profile.contains("(deny network*)"), "{profile}");
 }
 
+/// `wanax export` bundles the run's audit evidence into one directory.
+#[test]
+fn export_bundles_tombstone_diff_and_manifest() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    let out = h.run(&["export", &run_id], 0);
+    assert!(out.stdout.contains("exported"), "{}", out.stdout);
+    let dir = h.path().join(format!(".wanax/exports/{run_id}"));
+    for f in [
+        "envelope.json",
+        "TOMBSTONE.md",
+        "contract.md",
+        "replay.json",
+        "inner.diff",
+        "manifest.json",
+    ] {
+        assert!(dir.join(f).is_file(), "missing {f}");
+    }
+    let diff = fs::read_to_string(dir.join("inner.diff")).unwrap();
+    assert!(diff.contains("pub fn add"), "{diff}");
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["state"], "accepted");
+    assert_eq!(manifest["verdicts"], serde_json::json!(["accept"]));
+    assert!(manifest["inner_diff"].as_bool().unwrap());
+}
+
 /// ACP adapter: an NDJSON-RPC stub agent drives initialize → session/new →
 /// session/prompt end to end — the prompt asks permission (we answer with
 /// the allow option), writes the fix, streams a chunk, and reports usage.

@@ -1,5 +1,6 @@
 mod audit;
 mod check;
+mod export;
 mod clean;
 mod doctor;
 mod engine;
@@ -133,6 +134,13 @@ enum Commands {
     Audit {
         run_id: String,
     },
+    /// Bundle a run's audit evidence (tombstone, contract, inner diff,
+    /// replayed state, LEARNINGS, manifest) into one directory.
+    Export {
+        run_id: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Mechanical contract preflight: glob coverage, bound_test existence,
     /// vacuous-green traps, adapter availability. Exits non-zero on FAIL.
     Check {
@@ -237,6 +245,9 @@ async fn run() -> Result<(), WanaxError> {
             .await
         }
         Commands::Audit { run_id } => audit::run(audit::AuditOpts { run_id, data_dir }).await,
+        Commands::Export { run_id, out } => {
+            export::run(export::ExportOpts { run_id, out, data_dir }).await
+        }
         Commands::Check { contract, adapter } => {
             check::run(check::CheckOpts {
                 contract,
