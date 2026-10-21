@@ -30,6 +30,17 @@ pub struct FileConfig {
     pub verify: VerifyConfig,
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    #[serde(default)]
+    pub run: RunConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RunConfig {
+    /// Shell command fired once when a run reaches a terminal state.
+    /// Runs in the repo with WANAX_RUN_ID / WANAX_STATE /
+    /// WANAX_SPENT_USD / WANAX_LAST_ERROR in its environment.
+    #[serde(default)]
+    pub notify_cmd: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +112,12 @@ pub struct WorkerConfig {
     pub codex_bin: String,
     #[serde(default)]
     pub codex_args: Vec<String>,
+    /// ACP-capable agent binary (agent-client-protocol over stdio), e.g.
+    /// `claude-code-acp` or `gemini` with `--acp` in acp_args.
+    #[serde(default = "default_acp_bin")]
+    pub acp_bin: String,
+    #[serde(default)]
+    pub acp_args: Vec<String>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u32,
     /// Egress confinement for worker/test children: off | allowlist | isolated.
@@ -124,6 +141,8 @@ impl Default for WorkerConfig {
             claude_args: Vec::new(),
             codex_bin: default_codex_bin(),
             codex_args: Vec::new(),
+            acp_bin: default_acp_bin(),
+            acp_args: Vec::new(),
             timeout_secs: default_timeout(),
             egress: default_egress(),
             egress_allow: Vec::new(),
@@ -304,6 +323,9 @@ fn default_claude_bin() -> String {
 }
 fn default_codex_bin() -> String {
     "codex".into()
+}
+fn default_acp_bin() -> String {
+    "claude-code-acp".into()
 }
 fn default_timeout() -> u32 {
     DEFAULT_WORKER_TIMEOUT_SECS
@@ -555,6 +577,7 @@ fn overlay(mut base: FileConfig, over: FileConfig) -> FileConfig {
     base.test = over.test;
     base.lock = over.lock;
     base.sandbox = over.sandbox;
+    base.run = over.run;
     if over.verify.plugins.is_empty()
         && !over.verify.require_plugins
         && over.verify.agent_spec_bin == default_agent_spec_bin()

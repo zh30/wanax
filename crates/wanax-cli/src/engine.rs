@@ -45,6 +45,7 @@ use wanax_verify::{
 };
 use wanax_worker::{
     ClaudeAdapter, CmdAdapter, CodexAdapter, FakeAdapter, OctoscodeAdapter, WorkerAdapter,
+    acp::AcpAdapter,
     WorkerContext,
 };
 
@@ -1145,6 +1146,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 None if dags.iter().all(|u| u.state == WorkUnitState::Accepted) => {
                     store.set_state(&mut run, RunState::Accepted, None).await?;
                     println!("state={}", run.state.as_str());
+                    crate::notify::fire_if_terminal(repo, &run);
                     break Ok(());
                 }
                 None => {
@@ -1723,6 +1725,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 }
                 store.set_state(&mut run, RunState::Accepted, None).await?;
                 println!("state={}", run.state.as_str());
+                crate::notify::fire_if_terminal(repo, &run);
                 write_result(
                     repo,
                     &run.id,
@@ -1755,6 +1758,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             VerdictDecision::Reject => {
                 store.set_state(&mut run, RunState::Rejected, None).await?;
                 println!("state={}", run.state.as_str());
+                crate::notify::fire_if_terminal(repo, &run);
                 write_result(
                     repo,
                     &run.id,
@@ -1781,6 +1785,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     .set_state(&mut run, RunState::Escalate, Some(reason.clone()))
                     .await?;
                 println!("state={}", run.state.as_str());
+                crate::notify::fire_if_terminal(repo, &run);
                 break Err(WanaxError::new(ErrorCode::Escalated, reason));
             }
             VerdictDecision::Rework => {
@@ -1803,6 +1808,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                             )
                             .await?;
                         println!("state=escalate");
+                        crate::notify::fire_if_terminal(repo, &run);
                         break Err(WanaxError::from_code(ErrorCode::ReworkLimit));
                     }
                     if let Some(ref mut dags) = dag_units {
@@ -1826,6 +1832,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                             )
                             .await?;
                         println!("state=escalate");
+                        crate::notify::fire_if_terminal(repo, &run);
                         break Err(WanaxError::from_code(ErrorCode::ReworkLimit));
                     }
                     existing.state = WorkUnitState::Queued;
@@ -2785,6 +2792,11 @@ async fn start_adapter(
                 .start(ctx)
                 .await
         }
+        WorkerAdapterKind::Acp => {
+            AcpAdapter::new(worker.acp_bin.clone(), worker.acp_args.clone())
+                .start(ctx)
+                .await
+        }
     }
 }
 
@@ -2825,6 +2837,12 @@ pub(crate) fn preflight_adapter(adapter_kind: WorkerAdapterKind, cfg: &ResolvedC
         WorkerAdapterKind::Codex => CodexAdapter::new(
             cfg.file.worker.codex_bin.clone(),
             cfg.file.worker.codex_args.clone(),
+        )
+        .resolve_bin()
+        .map(|_| ()),
+        WorkerAdapterKind::Acp => AcpAdapter::new(
+            cfg.file.worker.acp_bin.clone(),
+            cfg.file.worker.acp_args.clone(),
         )
         .resolve_bin()
         .map(|_| ()),
@@ -2935,13 +2953,24 @@ fn sandbox_for(
 ) -> Result<SandboxSpec, WanaxError> {
     let rd = run_dir(repo, run_id);
     let git_dir = git_common_dir(repo).unwrap_or_else(|_| repo.join(".git"));
-    sandbox::resolve(
+    let spec = sandbox::resolve(
         &cfg.file.sandbox.mode,
         vec![worktree.to_path_buf(), git_dir, rd.clone()],
         &cfg.file.sandbox.extra_write_paths,
         Some(rd.join(format!("sandbox-{role}.sb"))),
         net,
-    )
+    )?;
+    if !matches!(net, wanax_core::sandbox::NetConfine::Open)
+        && spec.backend == wanax_core::sandbox::SandboxBackend::None
+    {
+        // Egress confinement was requested but there is no sandbox backend
+        // to enforce it (e.g. bwrap missing on Linux). Silent degradation of
+        // a security control must never be silent.
+        println!(
+            "warn: egress confinement requested for {role} but no sandbox backend available; child network is unrestricted"
+        );
+    }
+    Ok(spec)
 }
 
 fn baseline_exit_from_envelope(repo: &Path, run_id: &str) -> Option<i32> {
@@ -3031,6 +3060,7 @@ async fn fail_budget(store: &Store, repo: &Path, run: &mut FactoryRun) -> Result
         )
         .await?;
     println!("state={}", run.state.as_str());
+    crate::notify::fire_if_terminal(repo, run);
     let _ = append_event(
         repo,
         &run.id,
@@ -3054,6 +3084,7 @@ async fn fail_run(
         .set_state(&mut *run, RunState::Failed, Some(err.message.clone()))
         .await?;
     println!("state={}", run.state.as_str());
+    crate::notify::fire_if_terminal(repo, run);
     let _ = append_event(
         repo,
         &run.id,

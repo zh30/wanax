@@ -10,6 +10,8 @@ use wanax_core::sandbox::{self, SandboxSpec};
 use wanax_core::types::Receipt;
 use wanax_verify::run_test_command;
 
+pub mod acp;
+
 pub use wanax_core::envenv::{env_has_forbidden, FORBIDDEN_ENV};
 
 #[derive(Debug, Clone)]
@@ -90,7 +92,7 @@ pub fn sanitized_env(ctx: &WorkerContext) -> HashMap<String, String> {
 
 /// Spawn `bin args` through the optional OS sandbox, in its own process group
 /// so timeouts and cancels can kill the whole tree, not just the leader.
-fn spawn_confined(
+pub(crate) fn spawn_confined(
     bin: &Path,
     args: &[String],
     ctx: &WorkerContext,
@@ -117,7 +119,27 @@ fn spawn_confined(
 }
 
 /// Signal every process in the group led by `pid` (negative pid = pgid).
+/// `libc::killpg` directly — spawning `/bin/kill` under CI fork pressure
+/// was flaky: if that spawn failed, the group was silently never killed.
 pub fn kill_process_group(pid: u32, sig: &str) {
+    #[cfg(unix)]
+    {
+        if pid == 0 {
+            return;
+        }
+        let num = match sig {
+            "-TERM" => libc::SIGTERM,
+            "-KILL" => libc::SIGKILL,
+            "-HUP" => libc::SIGHUP,
+            "-INT" => libc::SIGINT,
+            _ => libc::SIGKILL,
+        };
+        unsafe {
+            libc::killpg(pid as libc::pid_t, num);
+        }
+        return;
+    }
+    #[allow(unreachable_code)]
     if pid > 0 {
         let _ = std::process::Command::new("kill")
             .args([sig, &format!("-{pid}")])
@@ -522,11 +544,17 @@ impl WorkerAdapter for CmdAdapter {
         let started = std::time::Instant::now();
         let mut cmd = spawn_confined(&bin, &self.args, ctx)?;
         cmd.env("WANAX_INSTRUCTION", &ctx.instruction);
-        let child = cmd.spawn().map_err(|e| {
-            WanaxError::new(
-                ErrorCode::AdapterMissing,
-                format!("adapter binary not found: {}: {e}", self.cmd),
-            )
+        let child = cmd.spawn().map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+                WanaxError::new(
+                    ErrorCode::AdapterMissing,
+                    format!("adapter binary not found: {}: {e}", self.cmd),
+                )
+            }
+            _ => WanaxError::with_detail(
+                ErrorCode::WorkerCrash,
+                format!("adapter spawn failed: {}: {e}", self.cmd),
+            ),
         })?;
         let pid = child.id().unwrap_or(0);
         let out = match tokio::time::timeout(
@@ -701,7 +729,7 @@ fn cancel_pid(pid: u32) -> Result<(), WanaxError> {
     Ok(())
 }
 
-fn tail_8000(stdout: &[u8], stderr: &[u8]) -> String {
+pub(crate) fn tail_8000(stdout: &[u8], stderr: &[u8]) -> String {
     let mut t = String::from_utf8_lossy(stdout).into_owned();
     t.push_str(&String::from_utf8_lossy(stderr));
     t.chars()
@@ -792,7 +820,7 @@ fn parse_codex_jsonl(stdout: &str) -> CliMeter {
     m
 }
 
-fn receipt_from_handle(
+pub(crate) fn receipt_from_handle(
     ctx: &WorkerContext,
     handle: &WorkerHandle,
     adapter: &str,
@@ -1090,12 +1118,26 @@ mod tests {
         let err = adapter.start(&ctx).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::WorkerTimeout);
         let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_string();
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let alive = std::process::Command::new("kill")
-            .args(["-0", &pid])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        // Poll rather than fixed-sleep: `kill -0` also succeeds on a
+        // zombie whose reaper hasn't cleaned up yet (common on loaded
+        // CI boxes). Treat zombie state as dead.
+        let mut alive = true;
+        for _ in 0..40 {
+            let status = std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            let zombie = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .map(|s| s.contains(") Z"))
+                .unwrap_or(false);
+            if !status || zombie {
+                alive = false;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
         assert!(!alive, "grandchild {pid} survived the timeout kill");
     }
 

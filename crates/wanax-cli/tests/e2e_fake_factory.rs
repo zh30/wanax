@@ -1933,21 +1933,25 @@ fn egress_allowlist_confines_worker_network() {
     let egress = started["payload"]["egress"].as_str().unwrap_or("");
     assert!(egress.starts_with("allowlist:"), "{env}");
 
-    // The inner sandbox profile denies outbound except the local proxy.
-    let runs = h.path().join(".wanax/runs");
-    let profile = fs::read_dir(&runs)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find_map(|e| {
-            let p = e.path().join("sandbox-inner.sb");
-            p.is_file().then(|| fs::read_to_string(p).unwrap())
-        })
-        .expect("inner sb profile");
-    assert!(
-        profile.contains("(deny network-outbound)")
-            && profile.contains("(remote tcp \"localhost:"),
-        "{profile}"
-    );
+    // The inner sandbox profile denies outbound except the local proxy —
+    // the `.sb` artifact is Seatbelt-only (bwrap confinement is argv).
+    #[cfg(target_os = "macos")]
+    {
+        let runs = h.path().join(".wanax/runs");
+        let profile = fs::read_dir(&runs)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find_map(|e| {
+                let p = e.path().join("sandbox-inner.sb");
+                p.is_file().then(|| fs::read_to_string(p).unwrap())
+            })
+            .expect("inner sb profile");
+        assert!(
+            profile.contains("(deny network-outbound)")
+                && profile.contains("(remote tcp \"localhost:"),
+            "{profile}"
+        );
+    }
 }
 
 /// egress = "isolated": no proxy, no network at all.
@@ -1969,16 +1973,192 @@ fn egress_isolated_denies_all_network() {
         0,
     );
     assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
-    let runs = h.path().join(".wanax/runs");
-    let profile = fs::read_dir(&runs)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .find_map(|e| {
-            let p = e.path().join("sandbox-inner.sb");
-            p.is_file().then(|| fs::read_to_string(p).unwrap())
-        })
-        .expect("inner sb profile");
-    assert!(profile.contains("(deny network*)"), "{profile}");
+    #[cfg(target_os = "macos")]
+    {
+        let runs = h.path().join(".wanax/runs");
+        let profile = fs::read_dir(&runs)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find_map(|e| {
+                let p = e.path().join("sandbox-inner.sb");
+                p.is_file().then(|| fs::read_to_string(p).unwrap())
+            })
+            .expect("inner sb profile");
+        assert!(profile.contains("(deny network*)"), "{profile}");
+    }
+}
+
+/// `[run] notify_cmd` fires once on terminal state with WANAX_* env —
+/// and never fires on a cancelled lock-holder mid-flight.
+#[test]
+fn notify_cmd_fires_on_terminal_state() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t.push_str("\n[run]\nnotify_cmd = \"printf %s \\\"$WANAX_STATE $WANAX_RUN_ID\\\" > notify.out\"\n");
+    fs::write(&p, t).unwrap();
+    git(h.path(), &["add", ".wanax/config.toml"]);
+    git(h.path(), &["commit", "-m", "notify config"]);
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    // The hook is fire-and-forget — give it a beat to land.
+    let f = h.path().join("notify.out");
+    for _ in 0..20 {
+        if f.is_file() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    let got = fs::read_to_string(&f).expect("notify hook never ran");
+    assert_eq!(got, format!("accepted {run_id}"), "{got}");
+}
+
+/// `wanax export` bundles the run's audit evidence into one directory.
+#[test]
+fn export_bundles_tombstone_diff_and_manifest() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    let out = h.run(&["export", &run_id], 0);
+    assert!(out.stdout.contains("exported"), "{}", out.stdout);
+    let dir = h.path().join(format!(".wanax/exports/{run_id}"));
+    for f in [
+        "envelope.json",
+        "TOMBSTONE.md",
+        "contract.md",
+        "replay.json",
+        "inner.diff",
+        "manifest.json",
+    ] {
+        assert!(dir.join(f).is_file(), "missing {f}");
+    }
+    let diff = fs::read_to_string(dir.join("inner.diff")).unwrap();
+    assert!(diff.contains("pub fn add"), "{diff}");
+    let manifest: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(manifest["state"], "accepted");
+    assert_eq!(manifest["verdicts"], serde_json::json!(["accept"]));
+    assert!(manifest["inner_diff"].as_bool().unwrap());
+}
+
+/// ACP adapter: an NDJSON-RPC stub agent drives initialize → session/new →
+/// session/prompt end to end — the prompt asks permission (we answer with
+/// the allow option), writes the fix, streams a chunk, and reports usage.
+#[test]
+fn acp_adapter_drives_agent_through_rpc() {
+    let h = Harness::new();
+    h.write_contract(&contract("src/**"));
+    // ACP stub: speaks newline-delimited JSON-RPC, waits for the
+    // permission reply before writing (proves request→response works).
+    let stub = r#"import json,sys
+def send(o):
+    sys.stdout.write(json.dumps(o)+"\n"); sys.stdout.flush()
+LIB = '''@LIB@'''
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    m=json.loads(line)
+    mid=m.get("id"); meth=m.get("method")
+    if meth=="initialize":
+        send({"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":1,"agentCapabilities":{}}})
+    elif meth=="session/new":
+        send({"jsonrpc":"2.0","id":mid,"result":{"sessionId":"s1"}})
+    elif meth=="session/prompt":
+        send({"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{"sessionId":"s1","options":[{"optionId":"allow","kind":"allow_always"}]}})
+        for r in sys.stdin:
+            m2=json.loads(r)
+            if m2.get("id")==99 and "result" in m2: break
+        open("src/lib.rs","w").write(LIB)
+        send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"wrote lib.rs"}}}})
+        send({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"usage_update","usedTokens":42,"cost":{"amount":0.001,"currency":"USD"}}}})
+        send({"jsonrpc":"2.0","id":mid,"result":{"stopReason":"end_turn"}})
+        break
+"#
+    .replace("@LIB@", GOOD_LIB);
+    let stub_path = h.path().join("acp_stub.py");
+    fs::write(&stub_path, &stub).unwrap();
+    git(h.path(), &["add", "acp_stub.py"]);
+    git(h.path(), &["commit", "-m", "acp stub"]);
+    // [worker] adapter=acp, acp_bin=python3, acp_args=[stub]
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t = t.replace(
+        "adapter = \"octoscode\"",
+        &format!(
+            "adapter = \"acp\"\nacp_bin = \"python3\"\nacp_args = [\"{}\"]",
+            stub_path.display()
+        ),
+    );
+    fs::write(&p, t).unwrap();
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "acp"],
+        0,
+    );
+    assert!(
+        out.stdout.contains("state=accepted"),
+        "stdout={} stderr={}",
+        out.stdout,
+        out.stderr
+    );
+    // The stub's file made it into the inner branch.
+    let env = h.envelope();
+    let run_id = env["run_id"].as_str().unwrap();
+    let lib = Command::new("git")
+        .args(["show", &format!("wanax/{run_id}/inner:src/lib.rs")])
+        .current_dir(h.path())
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&lib.stdout).contains("a + b"),
+        "acp worker's write never reached the inner branch"
+    );
+}
+
+/// `wanax audit` verifies the tombstone: an intact envelope passes; a
+/// tampered payload is caught by the per-event hash.
+#[test]
+fn audit_verifies_tombstone_integrity() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    assert!(out.stdout.contains("state=accepted"));
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+
+    let out = h.run(&["audit", &run_id], 0);
+    assert!(out.stdout.contains("integrity: OK"), "{}", out.stdout);
+
+    // Tamper: flip a payload field inside envelope.json — the stored
+    // payload_sha256 must catch it.
+    let env_path = h
+        .path()
+        .join(format!(".wanax/runs/{run_id}/envelope.json"));
+    let mut env: Value =
+        serde_json::from_str(&fs::read_to_string(&env_path).unwrap()).unwrap();
+    env["events"][0]["payload"]["injected"] = serde_json::json!("tampered");
+    fs::write(&env_path, serde_json::to_string_pretty(&env).unwrap()).unwrap();
+    let out = h.run(&["audit", &run_id], 1);
+    assert!(
+        out.stdout.contains("payload_sha256 mismatch"),
+        "{}",
+        out.stdout
+    );
 }
 
 /// Secret content scan: a worker that writes an API key into src/lib.rs

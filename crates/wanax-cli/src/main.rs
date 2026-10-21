@@ -1,12 +1,15 @@
+mod audit;
 mod check;
 mod clean;
 mod doctor;
 mod engine;
-mod replay;
+mod export;
 mod gh;
 mod i18n;
 mod init;
 mod logging;
+mod notify;
+mod replay;
 mod report;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -38,6 +41,7 @@ enum AdapterArg {
     Cmd,
     Claude,
     Codex,
+    Acp,
 }
 
 impl From<AdapterArg> for WorkerAdapterKind {
@@ -48,6 +52,7 @@ impl From<AdapterArg> for WorkerAdapterKind {
             AdapterArg::Cmd => Self::Cmd,
             AdapterArg::Claude => Self::Claude,
             AdapterArg::Codex => Self::Codex,
+            AdapterArg::Acp => Self::Acp,
         }
     }
 }
@@ -124,6 +129,18 @@ enum Commands {
         /// Rule-based suggestions: is the bottleneck spec or implementation.
         #[arg(long)]
         suggest: bool,
+    },
+    /// Verify a run's tombstone integrity: per-event payload hashes,
+    /// sequence/id invariants, terminal-state evidence, DB cross-check.
+    Audit {
+        run_id: String,
+    },
+    /// Bundle a run's audit evidence (tombstone, contract, inner diff,
+    /// replayed state, LEARNINGS, manifest) into one directory.
+    Export {
+        run_id: String,
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Mechanical contract preflight: glob coverage, bound_test existence,
     /// vacuous-green traps, adapter availability. Exits non-zero on FAIL.
@@ -227,6 +244,10 @@ async fn run() -> Result<(), WanaxError> {
                 max_total_usd_micros,
             })
             .await
+        }
+        Commands::Audit { run_id } => audit::run(audit::AuditOpts { run_id, data_dir }).await,
+        Commands::Export { run_id, out } => {
+            export::run(export::ExportOpts { run_id, out, data_dir }).await
         }
         Commands::Check { contract, adapter } => {
             check::run(check::CheckOpts {
@@ -501,6 +522,7 @@ async fn cancel(data_dir: PathBuf, run_id: String) -> Result<(), WanaxError> {
     let _ = store
         .set_state(&mut run, wanax_core::RunState::Cancelled, None)
         .await;
+    crate::notify::fire_if_terminal(&repo, &run);
     if let Ok(mut env) = wanax_tombstone::load_envelope(&repo, &run_id) {
         env.current_state = "cancelled".into();
         env.events.push(wanax_tombstone::make_event(

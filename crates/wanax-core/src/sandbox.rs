@@ -377,6 +377,7 @@ mod tests {
         assert!(!open.contains("network"));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn seatbelt_wrap_prefixes_argv() {
         let spec = SandboxSpec {
@@ -387,9 +388,6 @@ mod tests {
             seatbelt_profile: Some(PathBuf::from("/tmp/p.sb")),
         };
         let (prog, argv) = wrap(&spec, Path::new("/usr/bin/claude"), &["-p".into()]).unwrap();
-        if bin_on_path("sandbox-exec").is_none() {
-            return; // backend present on macOS dev machines; skip elsewhere
-        }
         assert_eq!(prog, bin_on_path("sandbox-exec").unwrap());
         assert_eq!(argv[0], "-f");
         assert!(argv[2].ends_with("claude"));

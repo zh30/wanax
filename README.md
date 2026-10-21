@@ -151,7 +151,7 @@ You write the contract every time. You do not retune the factory every time.
 
 ```toml
 [commander]
-provider = "openai_compat"   # openai | openai_compat | anthropic | claude_cli | codex_cli
+provider = "openai_compat"   # openai | openai_compat | openai_responses | anthropic | claude_cli | codex_cli
 model = "gpt-4.1"
 base_url = "https://api.openai.com/v1"
 # cli_bin = "claude"         # when provider is claude_cli / codex_cli
@@ -166,10 +166,14 @@ base_url = "https://api.openai.com/v1"
 # empty → self-review is mechanical only (tombstone: self_review=degraded)
 
 [worker]
-adapter = "octoscode"   # octoscode | fake | cmd | claude | codex
+adapter = "octoscode"   # octoscode | fake | cmd | claude | codex | acp
 octoscode_bin = "octoscode"
 claude_bin = "claude"
 codex_bin = "codex"
+# acp_bin = "claude-code-acp"  # any agent-client-protocol server; drives
+# acp_args = []                # initialize → session/new → session/prompt
+                              # over stdio NDJSON-RPC (claude-code-acp,
+                              # gemini --acp, codex wrappers, …)
 # cmd = "my-agent"       # PATH name or absolute path when adapter = "cmd"
 # cmd_args = []          # optional; instruction is WANAX_INSTRUCTION, not argv
 # egress = "allowlist"   # off | allowlist | isolated — worker/test children get
@@ -184,6 +188,11 @@ repo_exclusive = true   # false → path-set lock on allowed_globs; disjoint run
 [budget]
 max_usd = "5.00"
 max_inner_turns = 40
+
+[run]
+# notify_cmd = "osascript -e 'display notification \"$WANAX_STATE\" with title \"wanax\"'"
+# fired once when a run reaches a terminal state; env carries
+# WANAX_RUN_ID / WANAX_STATE / WANAX_SPENT_USD / WANAX_LAST_ERROR
 
 [test]
 default_command = "cargo test"
@@ -205,7 +214,7 @@ Keys come only from the environment. They are never written to git or to the tom
 | `WANAX_INNER_API_KEY` | Semantic self-review when `reviewer.model` ≠ `inner.model` |
 | `WANAX_DATA_DIR` | SQLite home (default `~/.wanax`) |
 
-`provider = "openai_compat"` plus `base_url` is the hook for any Chat Completions host. There is no separate `openrouter` provider. Consumer chat subscriptions (including SuperGrok) are a different ledger; Wanax talks to the HTTP API only.
+`provider = "openai_compat"` plus `base_url` is the hook for any Chat Completions host; `openai_responses` targets the Responses API (`/v1/responses`, the current surface for o-*/gpt-5 reasoning models). There is no separate `openrouter` provider. Consumer chat subscriptions (including SuperGrok) are a different ledger; Wanax talks to the HTTP API only.
 
 ### OpenRouter
 
@@ -292,7 +301,7 @@ wanax clean --include-dead       # also reclaim crash-orphan runs (non-terminal,
 | Command | Purpose |
 |---|---|
 | `wanax init [--force]` | Create `.wanax/` and an example contract |
-| `wanax start --contract <path> [--adapter octoscode\|fake\|cmd\|claude\|codex] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
+| `wanax start --contract <path> [--adapter octoscode\|fake\|cmd\|claude\|codex\|acp] [--allow-dirty]` | Freeze the contract, lock the repo, run the factory |
 | `wanax resume [run_id]` | Continue an interrupted non-terminal run (takes over a stale LOCK) |
 | `wanax status [run_id]` | State, spend, current unit, last event |
 | `wanax cost [run_id]` | Local spend board from SQLite / tombstone ticks (no network) |
@@ -301,6 +310,8 @@ wanax clean --include-dead       # also reclaim crash-orphan runs (non-terminal,
 | `wanax report [run_id]` | Fitness view: state, verdicts, baseline/outer exits, errors, cost, wall time |
 | `wanax improve --contract <path> [--iterations N]` | RSI loop: rerun with evidence carried across iterations |
 | `wanax check --contract <path>` | Mechanical contract preflight: bound_test names vs `cargo test -- --list`, glob coverage, vacuous-green traps, adapter availability. Exit 4 on FAIL |
+| `wanax audit <run_id>` | Tombstone integrity: per-event payload_sha256, sequence/id invariants, terminal-state evidence, DB cross-check. Exit non-zero on FAIL |
+| `wanax export <run_id> [--out <dir>]` | Bundle audit evidence — tombstone, frozen contract, `inner.diff`, replayed state, LEARNINGS, manifest — into `.wanax/exports/<run_id>/` |
 | `wanax clean [--dry-run] [--runs] [--include-accepted]` | Remove finished-run worktrees and branches |
 | `wanax doctor [--strict] [--fix-lock]` | Git, adapter, keys (presence only), stale lock, sandbox, disk |
 
