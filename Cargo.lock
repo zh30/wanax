@@ -2085,6 +2085,7 @@ name = "wanax-worker"
 version = "1.0.0"
 dependencies = [
  "async-trait",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
