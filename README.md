@@ -187,6 +187,9 @@ codex_bin = "codex"
                         # only whitelisted domains; seatbelt also confines
                         # outbound to localhost:proxy (bypass-proof, DNS too)
 # egress_allow = ["api.anthropic.com", "*.github.com"]
+# pass_env = ["OPENROUTER_API_KEY"]  # extra env keys into the worker child
+                                     # (agent CLIs' own credentials; FORBIDDEN
+                                     # names like WANAX_*_API_KEY still lose)
 
 [lock]
 repo_exclusive = true   # false → path-set lock on allowed_globs; disjoint runs may overlap in time
@@ -261,7 +264,7 @@ cmd = "/absolute/path/to/wanax/scripts/workers/claude.sh"
 
 ### Isolation model (defense in depth)
 
-Every child Wanax spawns — worker CLI, `test_command`, commander CLI, verifier plugins — gets a whitelist environment (`PATH HOME USER TMPDIR LANG LC_ALL TERM SHELL` plus contract-declared `test.pass_env`; never `GH_TOKEN`, `SSH_AUTH_SOCK`, or `WANAX_*_API_KEY`), a `GIT_CONFIG_GLOBAL` pointing at a wanax-generated config with an empty credential helper and signing off, and its own process group so timeouts and `wanax cancel` kill the whole tree.
+Every child Wanax spawns — worker CLI, `test_command`, commander CLI, verifier plugins — gets a whitelist environment (`PATH HOME USER TMPDIR LANG LC_ALL TERM SHELL` plus declared `worker.pass_env` / `test.pass_env`; never `GH_TOKEN`, `SSH_AUTH_SOCK`, or `WANAX_*_API_KEY`), a `GIT_CONFIG_GLOBAL` pointing at a wanax-generated config with an empty credential helper and signing off, and its own process group so timeouts and `wanax cancel` kill the whole tree.
 
 On top of that, `[sandbox] mode = "auto"` confines file access with the OS sandbox — `sandbox-exec` (Seatbelt) on macOS, `bwrap` on Linux: the child may write only its worktree, the repo's real `.git` dir, the run dir, TMPDIR, and standard toolchain caches (`~/.cargo`, `~/.rustup`, `~/.cache`, …; extend via `extra_write_paths`), and may not read `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.config/gh`. With no backend available the child runs unsandboxed and the tombstone records `sandbox = "none"`; `wanax doctor` reports the resolved backend.
 

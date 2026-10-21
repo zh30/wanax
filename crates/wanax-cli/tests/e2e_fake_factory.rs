@@ -1887,6 +1887,32 @@ fn bound_test_blocks_vacuous_accept() {
     );
 }
 
+/// wanax.log is a real run activity log: lifecycle lines land there
+/// (run started, worker spawn, gates, verdict, terminal state).
+#[test]
+fn run_log_records_lifecycle() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    h.write_contract(&contract("src/**"));
+    h.write_fake(&fake_toml_good());
+    let out = h.run(
+        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        0,
+    );
+    let run_id = out.stdout.lines().next().unwrap().to_string();
+    let log = find_file(h.path(), "wanax.log").expect("wanax.log");
+    let text = fs::read_to_string(log).unwrap_or_default();
+    for needle in [
+        "started contract=",
+        "worker spawned",
+        "verdict proposed=accept",
+        "accepted spent=",
+    ] {
+        assert!(text.contains(needle), "wanax.log missing {needle}:\n{text}");
+    }
+    let _ = run_id;
+}
+
 /// `wanax watch` polls to terminal state: exit 0 on accepted, exit 1
 /// on a non-accept terminal, timeout path is covered by a short bound.
 #[test]

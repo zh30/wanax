@@ -746,6 +746,13 @@ async fn run_factory(
     }
     let started = make_event(Actor::System, EventKind::RunStarted, started_payload);
     init_envelope(repo, &run.id, &run.contract_sha256, "dispatched", started)?;
+    tracing::info!(
+        "run {} started contract={} adapter={} budget={}",
+        run.id,
+        contract.name.as_deref().unwrap_or("?"),
+        adapter_kind.as_str(),
+        wanax_core::money::format_usd(cfg.max_usd_micros)
+    );
 
     // Baseline: run the bound test on the untouched base so the verdict can
     // distinguish red→green from green→green. Non-fatal; the run continues.
@@ -760,6 +767,7 @@ async fn run_factory(
         )?;
         let code = if r.timed_out { 124 } else { r.exit_code };
         baseline_exit = Some(code);
+        tracing::info!("baseline test exit={code} timed_out={}", r.timed_out);
         let _ = append_event(
             repo,
             &run.id,
@@ -1147,6 +1155,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     store.set_state(&mut run, RunState::Accepted, None).await?;
                     println!("state={}", run.state.as_str());
                     crate::notify::fire_if_terminal(repo, &run);
+                    tracing::info!("run {} accepted spent={}", run.id, wanax_core::money::format_usd(run.spent_usd_micros));
                     break Ok(());
                 }
                 None => {
@@ -1402,6 +1411,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
         let boundary =
             check_boundaries(&changed, &contract.allowed_globs, &contract.forbidden_globs)?;
         if !boundary.ok {
+            tracing::info!("boundary violation: {}", boundary.violating.join(", "));
             let _ = append_event(
                 repo,
                 &run.id,
@@ -1486,6 +1496,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 bound_ok = false;
                 bound_failing.push(name.to_string());
             }
+            tracing::info!("bound_test {crit_id} name={name} listed={:?} exit={} ok={ok}", listed, t.exit_code);
             let _ = append_event(
                 repo,
                 &run.id,
@@ -1511,6 +1522,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
         let must_missing =
             wanax_verify::missing_must_have(&contract.completion_criteria, &changed);
         if !must_missing.is_empty() {
+            tracing::info!("must_have missing: {}", must_missing.join(", "));
             let _ = append_event(
                 repo,
                 &run.id,
@@ -1652,6 +1664,10 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             break fail_budget(store, repo, &mut run).await;
         }
 
+        tracing::info!(
+            "verdict proposed={} enforced={} outer_exit={} boundary_ok={}",
+            proposed.decision.as_str(), decision.as_str(), outer_code, boundary.ok
+        );
         let mut reason = proposed.reason.clone();
         if note == Some(ErrorCode::AcceptOverride) {
             reason.push_str("\nE_ACCEPT_OVERRIDE");
@@ -1747,6 +1763,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 store.set_state(&mut run, RunState::Accepted, None).await?;
                 println!("state={}", run.state.as_str());
                 crate::notify::fire_if_terminal(repo, &run);
+                tracing::info!("run {} accepted spent={}", run.id, wanax_core::money::format_usd(run.spent_usd_micros));
                 write_result(
                     repo,
                     &run.id,
@@ -2056,6 +2073,7 @@ async fn run_single_unit(params: InnerSingleParams<'_>) -> Result<InnerPhaseResu
     run.worker_pid = Some(i64::from(std::process::id()));
     store.save_run_progress(run).await?;
     println!("starting worker pid={}", std::process::id());
+    tracing::info!("worker spawned unit={} adapter={}", u.id, adapter_kind.as_str());
 
     let unit_spec = inner_wt
         .join(".wanax")
