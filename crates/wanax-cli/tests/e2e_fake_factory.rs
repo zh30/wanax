@@ -991,6 +991,26 @@ fn llm_fixture_accepts_and_records_usage() {
     assert!(stdout.contains("state=accepted"), "{stdout}");
     let env = h.envelope();
     assert_eq!(env["current_state"], "accepted");
+    // Audit: the model's input prompt is persisted as a run artifact and
+    // hash-linked into the budget_tick event that charged it.
+    let ticks: Vec<&Value> = env["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "budget_tick" && e["payload"]["prompt_sha256"].is_string())
+        .collect();
+    assert!(!ticks.is_empty(), "no prompt-bearing budget_tick in {env}");
+    let run_dir = h.path().join(format!(".wanax/runs/{}", h.envelope()["run_id"].as_str().unwrap()));
+    let rel = ticks[0]["payload"]["prompt_path"].as_str().unwrap();
+    let prompt = fs::read_to_string(h.path().join(rel)).unwrap();
+    assert!(prompt.contains("== user =="), "prompt missing user section");
+    assert!(prompt.contains("Boundaries"), "prompt missing contract: {prompt}");
+    let sha = {
+        use wanax_core::hashutil::sha256_hex;
+        sha256_hex(prompt.as_bytes())
+    };
+    assert_eq!(ticks[0]["payload"]["prompt_sha256"], sha, "sha mismatch");
+    let _ = run_dir;
     let events = env["events"].as_array().unwrap();
     let reviews: Vec<&Value> = events
         .iter()

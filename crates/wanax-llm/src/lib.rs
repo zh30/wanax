@@ -97,6 +97,10 @@ pub struct LlmUsage {
     /// Real USD reported by the callee (e.g. a worker CLI). When set it is
     /// charged directly instead of token/char estimation.
     pub usd_micros: Option<i64>,
+    /// The exact prompt input (system+user) the model consumed — audit
+    /// needs the input, not just raw_json output. None for
+    /// mechanical/CLI sources that compose no prompt.
+    pub prompt_in: Option<String>,
 }
 
 impl LlmUsage {

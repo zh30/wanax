@@ -1211,6 +1211,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 &draft_usage,
                 cfg.commander_in_micros,
                 cfg.commander_out_micros,
+                Some("commander-dispatch"),
             )
             .await?;
             if is_budget_exhausted(&run) {
@@ -1625,6 +1626,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
             &usage,
             cfg.commander_in_micros,
             cfg.commander_out_micros,
+            Some("commander-verdict"),
         )
         .await?;
 
@@ -2738,6 +2740,7 @@ async fn run_goal_loop(
                 usage,
                 cfg.inner_in_micros,
                 cfg.inner_out_micros,
+                Some("inner-review"),
             )
             .await?;
         }
@@ -3037,6 +3040,7 @@ async fn charge_handle_usage(
         &usage,
         cfg.inner_in_micros,
         cfg.inner_out_micros,
+        Some("worker"),
     )
     .await
 }
@@ -3048,6 +3052,7 @@ async fn charge_and_tick(
     usage: &LlmUsage,
     rate_in: i64,
     rate_out: i64,
+    prompt_label: Option<&str>,
 ) -> Result<(), WanaxError> {
     let tick = if let Some(micros) = usage.usd_micros {
         charge_usd_micros(run, micros)
@@ -3069,6 +3074,23 @@ async fn charge_and_tick(
     }
     if let Some(tokens) = usage.completion_tokens {
         payload["completion_tokens"] = json!(tokens);
+    }
+    // Audit: the model's *input* prompt is evidence too — persist it as a
+    // run artifact and hash-link it into this event.
+    if let Some(prompt) = &usage.prompt_in {
+        if let Some(label) = prompt_label {
+            let dir = repo.join(".wanax").join("runs").join(&run.id).join("prompts");
+            let _ = fs::create_dir_all(&dir);
+            let n = fs::read_dir(&dir).map(|r| r.flatten().count()).unwrap_or(0) + 1;
+            let file = format!("{label}-{n}.txt");
+            let path = dir.join(&file);
+            if fs::write(&path, prompt).is_ok() {
+                let sha = wanax_core::hashutil::sha256_hex(prompt.as_bytes());
+                payload["prompt_path"] = json!(format!(".wanax/runs/{}/prompts/{file}", run.id));
+                payload["prompt_sha256"] = json!(sha);
+                payload["prompt_chars"] = json!(prompt.len());
+            }
+        }
     }
     let _ = append_event(
         repo,
