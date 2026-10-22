@@ -54,6 +54,10 @@ pub async fn run(opts: CleanOpts) -> Result<(), WanaxError> {
         if opts.runs {
             let dir = repo.join(".wanax").join("runs").join(&r.id);
             remove_dir(&dir, opts.dry_run);
+            // Export bundles are evidence for a run — once its tombstone is
+            // wiped the bundle is orphaned data too.
+            let exp = repo.join(".wanax").join("exports").join(&r.id);
+            remove_dir(&exp, opts.dry_run);
         }
         cleaned += 1;
     }
