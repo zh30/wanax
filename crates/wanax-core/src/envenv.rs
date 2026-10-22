@@ -117,4 +117,29 @@ mod tests {
             Some("1")
         );
     }
+
+    #[test]
+    fn is_forbidden_blocks_known_names() {
+        for name in FORBIDDEN_ENV {
+            assert!(is_forbidden(name), "{name}");
+        }
+        assert!(is_forbidden("GH_TOKEN"));
+        assert!(is_forbidden("SSH_AUTH_SOCK"));
+        assert!(is_forbidden("WANAX_COMMANDER_API_KEY"));
+        assert!(is_forbidden("WANAX_INNER_API_KEY"));
+    }
+
+    #[test]
+    fn is_forbidden_allows_benign_names() {
+        // Exact match only: `is_forbidden` is case-sensitive and does not
+        // substring-match. These names are absent from `FORBIDDEN_ENV`.
+        assert!(!FORBIDDEN_ENV.contains(&"PATH"));
+        assert!(!FORBIDDEN_ENV.contains(&"HOME"));
+        assert!(!FORBIDDEN_ENV.contains(&"SOME_AGENT_API_KEY"));
+        assert!(!is_forbidden("PATH"));
+        assert!(!is_forbidden("HOME"));
+        assert!(!is_forbidden("SOME_AGENT_API_KEY"));
+        // Case differs from the listed `GH_TOKEN`, so it is not forbidden.
+        assert!(!is_forbidden("gh_token"));
+    }
 }
