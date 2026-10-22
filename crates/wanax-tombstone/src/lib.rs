@@ -287,9 +287,6 @@ mod tests {
             .saturating_sub(1)
             .min(((samples.len() as f64) * 0.95).ceil() as usize - 1);
         let p95 = samples[idx];
-        assert!(
-            p95 < 50_000,
-            "NFR-2 append p95={p95}µs samples={samples:?}"
-        );
+        assert!(p95 < 50_000, "NFR-2 append p95={p95}µs samples={samples:?}");
     }
 }

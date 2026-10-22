@@ -15,7 +15,6 @@ impl Lang {
             _ => None,
         }
     }
-
 }
 
 thread_local! {

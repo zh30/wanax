@@ -1000,11 +1000,17 @@ fn llm_fixture_accepts_and_records_usage() {
         .filter(|e| e["kind"] == "budget_tick" && e["payload"]["prompt_sha256"].is_string())
         .collect();
     assert!(!ticks.is_empty(), "no prompt-bearing budget_tick in {env}");
-    let run_dir = h.path().join(format!(".wanax/runs/{}", h.envelope()["run_id"].as_str().unwrap()));
+    let run_dir = h.path().join(format!(
+        ".wanax/runs/{}",
+        h.envelope()["run_id"].as_str().unwrap()
+    ));
     let rel = ticks[0]["payload"]["prompt_path"].as_str().unwrap();
     let prompt = fs::read_to_string(h.path().join(rel)).unwrap();
     assert!(prompt.contains("== user =="), "prompt missing user section");
-    assert!(prompt.contains("Boundaries"), "prompt missing contract: {prompt}");
+    assert!(
+        prompt.contains("Boundaries"),
+        "prompt missing contract: {prompt}"
+    );
     let sha = {
         use wanax_core::hashutil::sha256_hex;
         sha256_hex(prompt.as_bytes())
@@ -1236,8 +1242,16 @@ fn setup_peer_crate(dir: &Path) {
         "pub mod a;\npub mod b;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn both() {\n        assert_eq!(super::a::x(), 1);\n        assert_eq!(super::b::y(), 2);\n    }\n}\n",
     )
     .unwrap();
-    fs::write(dir.join("src/a.rs"), "pub fn x() -> i32 { unimplemented!() }\n").unwrap();
-    fs::write(dir.join("src/b.rs"), "pub fn y() -> i32 { unimplemented!() }\n").unwrap();
+    fs::write(
+        dir.join("src/a.rs"),
+        "pub fn x() -> i32 { unimplemented!() }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src/b.rs"),
+        "pub fn y() -> i32 { unimplemented!() }\n",
+    )
+    .unwrap();
 }
 
 fn peer_dispatch_script(overlap: bool) -> String {
@@ -1354,7 +1368,12 @@ fn peer_disjoint_recovery_accepted() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(0), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(stdout.contains("state=accepted"), "{stdout}");
     let env = h.envelope();
     let peer_receipts = env["events"]
@@ -1394,9 +1413,17 @@ fn gh_pr_after_accept_outer_only() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(0), "stderr={}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(stdout.contains("state=accepted"), "{stdout}");
-    assert!(stdout.contains("pr=https://github.com/example/wanax/pull/42"), "{stdout}");
+    assert!(
+        stdout.contains("pr=https://github.com/example/wanax/pull/42"),
+        "{stdout}"
+    );
     let env = h.envelope();
     let pr_event = env["events"]
         .as_array()
@@ -1622,8 +1649,7 @@ fn resume_heals_work_units_from_envelope() {
             }
         }
         if !run_id.is_empty() {
-            let env_path =
-                h.path().join(format!(".wanax/runs/{run_id}/envelope.json"));
+            let env_path = h.path().join(format!(".wanax/runs/{run_id}/envelope.json"));
             if let Ok(text) = fs::read_to_string(&env_path) {
                 let seeds = text.matches("\"unit_seeded\"").count();
                 if seeds >= 2 && text.contains("\"unit_dispatched\"") {
@@ -1648,7 +1674,9 @@ fn resume_heals_work_units_from_envelope() {
     // Make the inner steps fast for the resumed run.
     for n in ["fake-unit-1.toml", "fake-unit-2.toml"] {
         let p = h.path().join(".wanax").join(n);
-        let t = fs::read_to_string(&p).unwrap().replace("sleep_ms = 60000\n", "");
+        let t = fs::read_to_string(&p)
+            .unwrap()
+            .replace("sleep_ms = 60000\n", "");
         fs::write(&p, t).unwrap();
     }
     let out = h.run(&["resume", &run_id, "--adapter", "fake"], 0);
@@ -1669,8 +1697,11 @@ fn resume_heals_work_units_from_envelope() {
     let env = h.envelope();
     assert!(
         env["events"].as_array().unwrap().iter().any(|e| {
-            e["kind"] == "error" && e["payload"]["detail"].as_str()
-                .unwrap_or("").contains("rebuilt from envelope")
+            e["kind"] == "error"
+                && e["payload"]["detail"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("rebuilt from envelope")
         }),
         "{env}"
     );
@@ -1758,15 +1789,19 @@ fn dag_ready_wave_runs_in_parallel() {
         .expect("peer receipts");
     let u3_dispatch = events
         .iter()
-        .position(|e| {
-            e["kind"] == "unit_dispatched" && e["payload"]["title"] == "add-c"
-        })
+        .position(|e| e["kind"] == "unit_dispatched" && e["payload"]["title"] == "add-c")
         .expect("u3 dispatch");
     assert!(u3_dispatch > last_peer_receipt, "{env}");
     // All three changes landed on the inner branch: wave lib.rs+b.rs, then c.rs.
     let run_id = env["run_id"].as_str().unwrap();
     let tree = Command::new("git")
-        .args(["ls-tree", "-r", "--name-only", &format!("wanax/{run_id}/inner"), "src/"])
+        .args([
+            "ls-tree",
+            "-r",
+            "--name-only",
+            &format!("wanax/{run_id}/inner"),
+            "src/",
+        ])
         .current_dir(h.path())
         .output()
         .unwrap();
@@ -1879,10 +1914,13 @@ fn bound_test_blocks_vacuous_accept() {
     assert_eq!(bt["payload"]["listed"], false, "{env}");
     // Outer cargo test was green yet the verdict was rework — the bound gate.
     assert!(
-        env["events"].as_array().unwrap().iter().any(|e| e["kind"]
-            == "verdict"
-            && e["payload"]["decision"] == "rework"
-            && e["payload"]["outer_test_exit_code"] == 0),
+        env["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "verdict"
+                && e["payload"]["decision"] == "rework"
+                && e["payload"]["outer_test_exit_code"] == 0),
         "{env}"
     );
 }
@@ -1896,7 +1934,13 @@ fn run_log_records_lifecycle() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     let run_id = out.stdout.lines().next().unwrap().to_string();
@@ -1922,7 +1966,13 @@ fn watch_polls_to_terminal() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     let run_id = out.stdout.lines().next().unwrap().to_string();
@@ -1943,7 +1993,13 @@ fn diff_shows_inner_changes() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     let run_id = out.stdout.lines().next().unwrap().to_string();
@@ -1990,8 +2046,12 @@ fn worker_pass_env_allows_keys_and_still_blocks_forbidden() {
     // the inner branch like any other artifact.
     let run_id = out.stdout.lines().next().unwrap().to_string();
     let proof = Command::new("git")
-        .args(["-C", &h.path().display().to_string(), "show",
-               &format!("wanax/{run_id}/inner:src/env.proof")])
+        .args([
+            "-C",
+            &h.path().display().to_string(),
+            "show",
+            &format!("wanax/{run_id}/inner:src/env.proof"),
+        ])
         .output()
         .expect("git show");
     let proof = String::from_utf8_lossy(&proof.stdout).into_owned();
@@ -2008,7 +2068,13 @@ fn status_json_and_doctor_acp() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     let run_id = out.stdout.lines().next().unwrap().to_string();
@@ -2038,7 +2104,8 @@ fn status_json_and_doctor_acp() {
     fs::write(&p, t).unwrap();
     let out = h.run(&["doctor"], 0);
     assert!(
-        out.stdout.contains("adapter definitely-not-installed-acp-bin"),
+        out.stdout
+            .contains("adapter definitely-not-installed-acp-bin"),
         "doctor should check acp_bin: {}",
         out.stdout
     );
@@ -2053,12 +2120,22 @@ fn replay_reconstructs_and_reconciles() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     let run_id = out.stdout.lines().next().unwrap().to_string();
     let out = h.run(&["replay", &run_id], 0);
-    assert!(out.stdout.contains("unit(s) reconstructed"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("unit(s) reconstructed"),
+        "{}",
+        out.stdout
+    );
     assert!(out.stdout.contains("divergence: none"), "{}", out.stdout);
     let out = h.run(&["replay", &run_id, "--json"], 0);
     let v: Value = serde_json::from_str(out.stdout.trim()).unwrap();
@@ -2071,7 +2148,11 @@ fn replay_reconstructs_and_reconciles() {
         .arg(format!("DELETE FROM work_units WHERE run_id = '{run_id}'"))
         .output()
         .expect("sqlite3");
-    assert!(wiped.status.success(), "{}", String::from_utf8_lossy(&wiped.stderr));
+    assert!(
+        wiped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&wiped.stderr)
+    );
     let out = h.run(&["replay", &run_id], 0);
     assert!(out.stdout.contains("missing in DB"), "{}", out.stdout);
     assert!(out.stdout.contains("divergence: 1"), "{}", out.stdout);
@@ -2118,9 +2199,11 @@ fn must_have_blocks_incomplete_accept() {
         "{env}"
     );
     assert!(
-        env["events"].as_array().unwrap().iter().any(|e| e["kind"]
-            == "verdict"
-            && e["payload"]["decision"] == "rework"),
+        env["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "verdict" && e["payload"]["decision"] == "rework"),
         "{env}"
     );
 }
@@ -2230,7 +2313,13 @@ fn egress_allowlist_confines_worker_network() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
@@ -2281,7 +2370,13 @@ fn egress_isolated_denies_all_network() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
@@ -2310,12 +2405,20 @@ fn notify_cmd_fires_on_terminal_state() {
     h.write_fake(&fake_toml_good());
     let p = h.path().join(".wanax/config.toml");
     let mut t = fs::read_to_string(&p).unwrap();
-    t.push_str("\n[run]\nnotify_cmd = \"printf %s \\\"$WANAX_STATE $WANAX_RUN_ID\\\" > notify.out\"\n");
+    t.push_str(
+        "\n[run]\nnotify_cmd = \"printf %s \\\"$WANAX_STATE $WANAX_RUN_ID\\\" > notify.out\"\n",
+    );
     fs::write(&p, t).unwrap();
     git(h.path(), &["add", ".wanax/config.toml"]);
     git(h.path(), &["commit", "-m", "notify config"]);
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     let run_id = out.stdout.lines().next().unwrap().to_string();
@@ -2339,7 +2442,13 @@ fn export_bundles_tombstone_diff_and_manifest() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     let run_id = out.stdout.lines().next().unwrap().to_string();
@@ -2415,7 +2524,13 @@ for line in sys.stdin:
     );
     fs::write(&p, t).unwrap();
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "acp"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "acp",
+        ],
         0,
     );
     assert!(
@@ -2447,7 +2562,13 @@ fn audit_verifies_tombstone_integrity() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     assert!(out.stdout.contains("state=accepted"));
@@ -2458,11 +2579,8 @@ fn audit_verifies_tombstone_integrity() {
 
     // Tamper: flip a payload field inside envelope.json — the stored
     // payload_sha256 must catch it.
-    let env_path = h
-        .path()
-        .join(format!(".wanax/runs/{run_id}/envelope.json"));
-    let mut env: Value =
-        serde_json::from_str(&fs::read_to_string(&env_path).unwrap()).unwrap();
+    let env_path = h.path().join(format!(".wanax/runs/{run_id}/envelope.json"));
+    let mut env: Value = serde_json::from_str(&fs::read_to_string(&env_path).unwrap()).unwrap();
     env["events"][0]["payload"]["injected"] = serde_json::json!("tampered");
     fs::write(&env_path, serde_json::to_string_pretty(&env).unwrap()).unwrap();
     let out = h.run(&["audit", &run_id], 1);
@@ -2485,7 +2603,13 @@ fn secret_in_diff_rejects_accept() {
         "turns = 1\nrun_tests = false\n\n[[writes]]\npath = \"src/lib.rs\"\ncontent = '''{GOOD_LIB}\nconst K: &str = \"sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ12\";\n'''\n"
     ));
     let out = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         1,
     );
     assert!(
@@ -2514,7 +2638,16 @@ fn check_reports_contract_health() {
     let h = Harness::new();
     h.set_adapter_fake();
     h.write_contract(&contract("src/**"));
-    let out = h.run(&["check", "--contract", "specs/add.contract.md", "--adapter", "fake"], 0);
+    let out = h.run(
+        &[
+            "check",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        0,
+    );
     assert!(out.stdout.contains("result: PASS"), "{}", out.stdout);
 }
 
@@ -2529,10 +2662,18 @@ fn check_warns_when_bound_test_missing() {
     h.write_contract(&c);
     // WARN not FAIL: "the work is supposed to create the test" is a
     // legitimate pattern — a typo still fails the outer gate, not the door.
-    let out = h.run(&["check", "--contract", "specs/add.contract.md", "--adapter", "fake"], 0);
+    let out = h.run(
+        &[
+            "check",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        0,
+    );
     assert!(
-        out.stdout.contains("definitely_missing_test")
-            && out.stdout.contains("not yet listed"),
+        out.stdout.contains("definitely_missing_test") && out.stdout.contains("not yet listed"),
         "stdout={} stderr={}",
         out.stdout,
         out.stderr
@@ -2544,7 +2685,16 @@ fn check_warns_when_allowed_globs_cover_tests() {
     let h = Harness::new();
     h.set_adapter_fake();
     h.write_contract(&contract("tests/**"));
-    let out = h.run(&["check", "--contract", "specs/add.contract.md", "--adapter", "fake"], 0);
+    let out = h.run(
+        &[
+            "check",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
+        0,
+    );
     assert!(
         out.stdout.contains("vacuous") || out.stdout.contains("binding tests"),
         "{}",
@@ -2561,12 +2711,24 @@ fn learnings_lifetime_block_aggregates_runs() {
     h.write_contract(&contract("src/**"));
     h.write_fake(&fake_toml_good());
     let _ = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         0,
     );
     h.write_fake(&fake_toml_bad());
     let _ = h.run(
-        &["start", "--contract", "specs/add.contract.md", "--adapter", "fake"],
+        &[
+            "start",
+            "--contract",
+            "specs/add.contract.md",
+            "--adapter",
+            "fake",
+        ],
         1,
     );
     let text = fs::read_to_string(h.path().join(".wanax/LEARNINGS.md")).unwrap();
@@ -2682,9 +2844,11 @@ fn agent_spec_plugin_runs_on_outer() {
     assert!(ran.contains("verify"), "{ran}");
     assert!(ran.contains("lifecycle"), "{ran}");
     let env = h.envelope();
-    let plugin_ev = env["events"].as_array().unwrap().iter().any(|e| {
-        e["kind"] == "state_changed" && e["payload"]["plugin"] == "agent-spec"
-    });
+    let plugin_ev = env["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "state_changed" && e["payload"]["plugin"] == "agent-spec");
     assert!(plugin_ev, "{env}");
 }
 
@@ -2727,8 +2891,16 @@ fn write_split_crate(dir: &Path) {
         "pub mod a;\npub mod b;\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn test_a() { assert_eq!(crate::a::value(), 1); }\n    #[test]\n    fn test_b() { assert_eq!(crate::b::value(), 2); }\n}\n",
     )
     .unwrap();
-    fs::write(dir.join("src/a.rs"), "pub fn value() -> i32 { unimplemented!() }\n").unwrap();
-    fs::write(dir.join("src/b.rs"), "pub fn value() -> i32 { unimplemented!() }\n").unwrap();
+    fs::write(
+        dir.join("src/a.rs"),
+        "pub fn value() -> i32 { unimplemented!() }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src/b.rs"),
+        "pub fn value() -> i32 { unimplemented!() }\n",
+    )
+    .unwrap();
 }
 
 fn wait_for_path_set_lock(repo: &Path) -> bool {
@@ -2753,9 +2925,7 @@ fn claude_adapter_accepts() {
     let script = install_cmd_script(
         h.data.path(),
         "claude",
-        &format!(
-            "#!/bin/sh\nset -eu\ncat >/dev/null\ncat > src/lib.rs << 'EOF'\n{GOOD_LIB}EOF\n"
-        ),
+        &format!("#!/bin/sh\nset -eu\ncat >/dev/null\ncat > src/lib.rs << 'EOF'\n{GOOD_LIB}EOF\n"),
     );
     h.set_adapter_claude(&script);
     h.write_contract(&contract("src/**"));
@@ -2840,7 +3010,9 @@ fn cost_lists_run_and_result_has_spent() {
     let cost = h.run(&["cost"], 0);
     assert!(cost.stdout.contains(run_id), "{}", cost.stdout);
     assert!(
-        cost.stdout.contains("USD") || cost.stdout.contains("美元") || cost.stdout.contains("0.0000"),
+        cost.stdout.contains("USD")
+            || cost.stdout.contains("美元")
+            || cost.stdout.contains("0.0000"),
         "{}",
         cost.stdout
     );
@@ -3282,9 +3454,7 @@ fn peer_receipts_run_concurrently() {
         .unwrap()
         .iter()
         .filter(|e| e["actor"] == "peer" && e["kind"] == "receipt_submitted")
-        .map(|e| {
-            wanax_core::timeutil::parse_rfc3339(e["at"].as_str().unwrap()).unwrap()
-        })
+        .map(|e| wanax_core::timeutil::parse_rfc3339(e["at"].as_str().unwrap()).unwrap())
         .collect();
     assert_eq!(ts.len(), 2, "expected two peer receipts");
     ts.sort();
@@ -3335,9 +3505,7 @@ fn claude_metering_charges_usd_and_turns() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|e| {
-            e["kind"] == "budget_tick" && e["payload"]["charge_usd_micros"] == 500_000
-        });
+        .any(|e| e["kind"] == "budget_tick" && e["payload"]["charge_usd_micros"] == 500_000);
     assert!(direct_charge, "no real-usd charge_usd_micros tick: {env}");
 }
 
@@ -3369,8 +3537,7 @@ fn improve_links_iterations_and_stops_at_limit() {
     // Iteration 2's evidence is identical (same deterministic fake) so the
     // loop may exit via either the no-progress early stop or the limit.
     assert!(
-        out.stderr.contains("improve: not accepted")
-            || out.stderr.contains("no progress"),
+        out.stderr.contains("improve: not accepted") || out.stderr.contains("no progress"),
         "stderr={}",
         out.stderr
     );
@@ -3380,10 +3547,9 @@ fn improve_links_iterations_and_stops_at_limit() {
         .collect();
     assert_eq!(runs.len(), 2, "expected two iteration runs");
     runs.sort(); // run ids are ULIDs — sorted order == creation order
-    let env2 = serde_json::from_str::<Value>(
-        &fs::read_to_string(runs[1].join("envelope.json")).unwrap(),
-    )
-    .unwrap();
+    let env2 =
+        serde_json::from_str::<Value>(&fs::read_to_string(runs[1].join("envelope.json")).unwrap())
+            .unwrap();
     let started = env2["events"]
         .as_array()
         .unwrap()
@@ -3534,10 +3700,9 @@ fn improve_from_seeds_evidence_chain() {
         .collect();
     runs.sort();
     assert_eq!(runs.len(), 2);
-    let env = serde_json::from_str::<Value>(
-        &fs::read_to_string(runs[1].join("envelope.json")).unwrap(),
-    )
-    .unwrap();
+    let env =
+        serde_json::from_str::<Value>(&fs::read_to_string(runs[1].join("envelope.json")).unwrap())
+            .unwrap();
     let started = env["events"]
         .as_array()
         .unwrap()
@@ -3561,11 +3726,7 @@ fn improve_from_seeds_evidence_chain() {
         ],
         4,
     );
-    assert!(
-        bad.stderr.contains("different contract"),
-        "{}",
-        bad.stderr
-    );
+    assert!(bad.stderr.contains("different contract"), "{}", bad.stderr);
 }
 
 /// RSI loop budget: --max-total-usd caps spend summed across iterations —
@@ -3620,11 +3781,7 @@ fn improve_adapters_ladder_preflight() {
         ],
         8,
     );
-    assert!(
-        out.stderr.contains("E_ADAPTER_MISSING"),
-        "{}",
-        out.stderr
-    );
+    assert!(out.stderr.contains("E_ADAPTER_MISSING"), "{}", out.stderr);
 }
 
 /// RSI: when an iteration accepts, improve stops immediately with success.
@@ -3684,7 +3841,11 @@ fn report_shows_fitness() {
     assert!(one.stdout.contains("state=accepted"), "{}", one.stdout);
     assert!(one.stdout.contains("baseline_exit="), "{}", one.stdout);
     assert!(one.stdout.contains("baseline_green="), "{}", one.stdout);
-    assert!(one.stdout.contains("outer_test_exits=[0]"), "{}", one.stdout);
+    assert!(
+        one.stdout.contains("outer_test_exits=[0]"),
+        "{}",
+        one.stdout
+    );
     assert!(one.stdout.contains("verdicts=accept"), "{}", one.stdout);
 
     // --json: machine-readable aggregate for external loops.
@@ -3722,9 +3883,7 @@ fn clean_removes_finished_run_artifacts() {
         .find(|l| l.starts_with("wx_"))
         .expect("run id")
         .to_string();
-    let inner_wt = h
-        .path()
-        .join(format!(".wanax/worktrees/{run_id}-inner"));
+    let inner_wt = h.path().join(format!(".wanax/worktrees/{run_id}-inner"));
     assert!(inner_wt.is_dir());
     let dry = h.run(&["clean", "--dry-run"], 0);
     assert!(dry.stdout.contains("would remove"), "{}", dry.stdout);

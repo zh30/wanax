@@ -75,11 +75,17 @@ fn apply_unit_fields(u: &mut WorkUnit, p: &serde_json::Value) {
         u.local_key = Some(v.to_string());
     }
     if let Some(v) = p["allowed_globs"].as_array() {
-        u.allowed_globs =
-            Some(v.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+        u.allowed_globs = Some(
+            v.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect(),
+        );
     }
     if let Some(v) = p["depends_on"].as_array() {
-        u.depends_on = v.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+        u.depends_on = v
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect();
     }
     if let Some(v) = p["test_command"].as_str() {
         u.test_command = Some(v.to_string());
@@ -145,8 +151,14 @@ pub fn envelope_snapshot(repo: &Path, run_id: &str) -> Option<ReplayOutcome> {
     for e in &env.events {
         match e.kind {
             EventKind::UnitSeeded => {
-                if upsert(&mut out, &mut by_id, run_id, &e.payload, WorkUnitState::Queued)
-                    .is_some()
+                if upsert(
+                    &mut out,
+                    &mut by_id,
+                    run_id,
+                    &e.payload,
+                    WorkUnitState::Queued,
+                )
+                .is_some()
                 {
                     saw_units = true;
                 }
@@ -188,7 +200,9 @@ pub fn envelope_snapshot(repo: &Path, run_id: &str) -> Option<ReplayOutcome> {
                     changed_files: p["changed_files"]
                         .as_array()
                         .map(|a| {
-                            a.iter().filter_map(|x| x.as_str().map(String::from)).collect()
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
                         })
                         .unwrap_or_default(),
                     test_exit_code: p["test_exit_code"].as_i64().unwrap_or(0) as i32,
@@ -198,8 +212,8 @@ pub fn envelope_snapshot(repo: &Path, run_id: &str) -> Option<ReplayOutcome> {
                     let u = &mut out.units[i];
                     u.state = WorkUnitState::ReceiptReady;
                     u.receipt_id = (!rid.is_empty()).then_some(rid);
-                    u.inner_commit_sha = (!stub.commit_sha.is_empty())
-                        .then(|| stub.commit_sha.clone());
+                    u.inner_commit_sha =
+                        (!stub.commit_sha.is_empty()).then(|| stub.commit_sha.clone());
                 }
                 out.receipts.insert(unit_id.clone(), stub);
             }
@@ -242,8 +256,7 @@ pub fn units_diverged(db: &[WorkUnit], replayed: &[WorkUnit]) -> bool {
     if db.len() != replayed.len() {
         return true;
     }
-    let by_id: HashMap<&str, &WorkUnit> =
-        db.iter().map(|u| (u.id.as_str(), u)).collect();
+    let by_id: HashMap<&str, &WorkUnit> = db.iter().map(|u| (u.id.as_str(), u)).collect();
     replayed.iter().any(|s| match by_id.get(s.id.as_str()) {
         None => true,
         Some(d) => {
@@ -289,41 +302,119 @@ mod tests {
     fn replay_rebuilds_dag_units_and_states() {
         let dir = tempfile::tempdir().unwrap();
         let rid = "wx_TEST";
-        init_envelope(dir.path(), rid, "sha", "dispatched",
-            ev(EventKind::RunStarted, json!({}))).unwrap();
+        init_envelope(
+            dir.path(),
+            rid,
+            "sha",
+            "dispatched",
+            ev(EventKind::RunStarted, json!({})),
+        )
+        .unwrap();
         // Seed two dag units.
-        append_event(dir.path(), rid, "queued", ev(EventKind::UnitSeeded, json!({
-            "work_unit_id": "u1", "seq": 1, "title": "a", "instruction": "ia",
-            "role": "goal", "local_key": "u1", "depends_on": [],
-            "allowed_globs": ["src/a.rs"]
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::UnitSeeded, json!({
-            "work_unit_id": "u2", "seq": 2, "title": "b", "instruction": "ib",
-            "role": "goal", "local_key": "u2", "depends_on": ["u1"],
-            "allowed_globs": ["src/b.rs"]
-        }))).unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::UnitSeeded,
+                json!({
+                    "work_unit_id": "u1", "seq": 1, "title": "a", "instruction": "ia",
+                    "role": "goal", "local_key": "u1", "depends_on": [],
+                    "allowed_globs": ["src/a.rs"]
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::UnitSeeded,
+                json!({
+                    "work_unit_id": "u2", "seq": 2, "title": "b", "instruction": "ib",
+                    "role": "goal", "local_key": "u2", "depends_on": ["u1"],
+                    "allowed_globs": ["src/b.rs"]
+                }),
+            ),
+        )
+        .unwrap();
         // u1 dispatched → receipt → accept verdict.
-        append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
-            "work_unit_id": "u1", "title": "a", "instruction": "ia"
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::ReceiptSubmitted, json!({
-            "work_unit_id": "u1", "receipt_id": "r1", "commit_sha": "abc",
-            "changed_files": ["src/a.rs"], "test_exit_code": 0, "claimed_pass": true
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
-            "decision": "accept", "work_unit_id": "u1"
-        }))).unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::UnitDispatched,
+                json!({
+                    "work_unit_id": "u1", "title": "a", "instruction": "ia"
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::ReceiptSubmitted,
+                json!({
+                    "work_unit_id": "u1", "receipt_id": "r1", "commit_sha": "abc",
+                    "changed_files": ["src/a.rs"], "test_exit_code": 0, "claimed_pass": true
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::Verdict,
+                json!({
+                    "decision": "accept", "work_unit_id": "u1"
+                }),
+            ),
+        )
+        .unwrap();
         // u2 dispatched → receipt → rework.
-        append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
-            "work_unit_id": "u2", "title": "b", "instruction": "ib"
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::ReceiptSubmitted, json!({
-            "work_unit_id": "u2", "receipt_id": "r2", "commit_sha": "def",
-            "changed_files": ["src/b.rs"], "test_exit_code": 1, "claimed_pass": false
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
-            "decision": "rework", "work_unit_id": "u2"
-        }))).unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::UnitDispatched,
+                json!({
+                    "work_unit_id": "u2", "title": "b", "instruction": "ib"
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::ReceiptSubmitted,
+                json!({
+                    "work_unit_id": "u2", "receipt_id": "r2", "commit_sha": "def",
+                    "changed_files": ["src/b.rs"], "test_exit_code": 1, "claimed_pass": false
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::Verdict,
+                json!({
+                    "decision": "rework", "work_unit_id": "u2"
+                }),
+            ),
+        )
+        .unwrap();
 
         let snap = envelope_snapshot(dir.path(), rid).unwrap();
         assert_eq!(snap.units.len(), 2);
@@ -338,15 +429,39 @@ mod tests {
     fn replay_pending_outer_when_verdict_missing() {
         let dir = tempfile::tempdir().unwrap();
         let rid = "wx_TEST2";
-        init_envelope(dir.path(), rid, "sha", "dispatched",
-            ev(EventKind::RunStarted, json!({}))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
-            "work_unit_id": "u1", "title": "a", "instruction": "ia", "seq": 1
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::ReceiptSubmitted, json!({
-            "work_unit_id": "u1", "receipt_id": "r1", "commit_sha": "abc",
-            "changed_files": ["src/a.rs"], "test_exit_code": 0, "claimed_pass": true
-        }))).unwrap();
+        init_envelope(
+            dir.path(),
+            rid,
+            "sha",
+            "dispatched",
+            ev(EventKind::RunStarted, json!({})),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::UnitDispatched,
+                json!({
+                    "work_unit_id": "u1", "title": "a", "instruction": "ia", "seq": 1
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::ReceiptSubmitted,
+                json!({
+                    "work_unit_id": "u1", "receipt_id": "r1", "commit_sha": "abc",
+                    "changed_files": ["src/a.rs"], "test_exit_code": 0, "claimed_pass": true
+                }),
+            ),
+        )
+        .unwrap();
         // crash before verdict
         let snap = envelope_snapshot(dir.path(), rid).unwrap();
         assert_eq!(snap.pending, Some(("u1".into(), "r1".into())));
@@ -359,25 +474,67 @@ mod tests {
     fn replay_wave_covers_marks_dag_members() {
         let dir = tempfile::tempdir().unwrap();
         let rid = "wx_TEST3";
-        init_envelope(dir.path(), rid, "sha", "dispatched",
-            ev(EventKind::RunStarted, json!({}))).unwrap();
+        init_envelope(
+            dir.path(),
+            rid,
+            "sha",
+            "dispatched",
+            ev(EventKind::RunStarted, json!({})),
+        )
+        .unwrap();
         for id in ["d1", "d2"] {
-            append_event(dir.path(), rid, "queued", ev(EventKind::UnitSeeded, json!({
-                "work_unit_id": id, "seq": 1, "title": id, "instruction": "i",
-                "local_key": id, "depends_on": []
-            }))).unwrap();
+            append_event(
+                dir.path(),
+                rid,
+                "queued",
+                ev(
+                    EventKind::UnitSeeded,
+                    json!({
+                        "work_unit_id": id, "seq": 1, "title": id, "instruction": "i",
+                        "local_key": id, "depends_on": []
+                    }),
+                ),
+            )
+            .unwrap();
         }
-        append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
-            "work_unit_id": "m1", "title": "peer-batch (2)", "instruction": "x",
-            "mode": "peer_batch", "covers": ["d1", "d2"]
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::ReceiptSubmitted, json!({
-            "work_unit_id": "m1", "receipt_id": "rm", "commit_sha": "sha",
-            "changed_files": ["src/a.rs", "src/b.rs"]
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
-            "decision": "accept", "work_unit_id": "m1"
-        }))).unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::UnitDispatched,
+                json!({
+                    "work_unit_id": "m1", "title": "peer-batch (2)", "instruction": "x",
+                    "mode": "peer_batch", "covers": ["d1", "d2"]
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::ReceiptSubmitted,
+                json!({
+                    "work_unit_id": "m1", "receipt_id": "rm", "commit_sha": "sha",
+                    "changed_files": ["src/a.rs", "src/b.rs"]
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::Verdict,
+                json!({
+                    "decision": "accept", "work_unit_id": "m1"
+                }),
+            ),
+        )
+        .unwrap();
         let snap = envelope_snapshot(dir.path(), rid).unwrap();
         let d1 = snap.units.iter().find(|u| u.id == "d1").unwrap();
         let d2 = snap.units.iter().find(|u| u.id == "d2").unwrap();
@@ -390,15 +547,39 @@ mod tests {
     fn replay_duplicate_dispatch_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let rid = "wx_DUP";
-        init_envelope(dir.path(), rid, "sha", "dispatched",
-            ev(EventKind::RunStarted, json!({}))).unwrap();
+        init_envelope(
+            dir.path(),
+            rid,
+            "sha",
+            "dispatched",
+            ev(EventKind::RunStarted, json!({})),
+        )
+        .unwrap();
         for _ in 0..3 {
-            append_event(dir.path(), rid, "queued", ev(EventKind::UnitSeeded, json!({
-                "work_unit_id": "u1", "seq": 1, "title": "a", "instruction": "i"
-            }))).unwrap();
-            append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
-                "work_unit_id": "u1", "title": "a", "instruction": "i"
-            }))).unwrap();
+            append_event(
+                dir.path(),
+                rid,
+                "queued",
+                ev(
+                    EventKind::UnitSeeded,
+                    json!({
+                        "work_unit_id": "u1", "seq": 1, "title": "a", "instruction": "i"
+                    }),
+                ),
+            )
+            .unwrap();
+            append_event(
+                dir.path(),
+                rid,
+                "queued",
+                ev(
+                    EventKind::UnitDispatched,
+                    json!({
+                        "work_unit_id": "u1", "title": "a", "instruction": "i"
+                    }),
+                ),
+            )
+            .unwrap();
         }
         let snap = envelope_snapshot(dir.path(), rid).unwrap();
         assert_eq!(snap.units.len(), 1);
@@ -411,23 +592,65 @@ mod tests {
     fn replay_rework_cycle_lands_accepted() {
         let dir = tempfile::tempdir().unwrap();
         let rid = "wx_REWORK";
-        init_envelope(dir.path(), rid, "sha", "dispatched",
-            ev(EventKind::RunStarted, json!({}))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::UnitSeeded, json!({
-            "work_unit_id": "u1", "seq": 1, "title": "a", "instruction": "i"
-        }))).unwrap();
+        init_envelope(
+            dir.path(),
+            rid,
+            "sha",
+            "dispatched",
+            ev(EventKind::RunStarted, json!({})),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::UnitSeeded,
+                json!({
+                    "work_unit_id": "u1", "seq": 1, "title": "a", "instruction": "i"
+                }),
+            ),
+        )
+        .unwrap();
         for r in ["r1", "r2"] {
-            append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
-                "work_unit_id": "u1", "title": "a", "instruction": "i"
-            }))).unwrap();
-            append_event(dir.path(), rid, "queued", ev(EventKind::ReceiptSubmitted, json!({
-                "work_unit_id": "u1", "receipt_id": r, "commit_sha": "abc",
-                "changed_files": ["src/a.rs"]
-            }))).unwrap();
+            append_event(
+                dir.path(),
+                rid,
+                "queued",
+                ev(
+                    EventKind::UnitDispatched,
+                    json!({
+                        "work_unit_id": "u1", "title": "a", "instruction": "i"
+                    }),
+                ),
+            )
+            .unwrap();
+            append_event(
+                dir.path(),
+                rid,
+                "queued",
+                ev(
+                    EventKind::ReceiptSubmitted,
+                    json!({
+                        "work_unit_id": "u1", "receipt_id": r, "commit_sha": "abc",
+                        "changed_files": ["src/a.rs"]
+                    }),
+                ),
+            )
+            .unwrap();
             let d = if r == "r1" { "rework" } else { "accept" };
-            append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
-                "decision": d, "work_unit_id": "u1"
-            }))).unwrap();
+            append_event(
+                dir.path(),
+                rid,
+                "queued",
+                ev(
+                    EventKind::Verdict,
+                    json!({
+                        "decision": d, "work_unit_id": "u1"
+                    }),
+                ),
+            )
+            .unwrap();
         }
         let snap = envelope_snapshot(dir.path(), rid).unwrap();
         assert_eq!(snap.units.len(), 1);
@@ -441,14 +664,38 @@ mod tests {
     fn replay_old_envelope_minimal_fields() {
         let dir = tempfile::tempdir().unwrap();
         let rid = "wx_OLD";
-        init_envelope(dir.path(), rid, "sha", "dispatched",
-            ev(EventKind::RunStarted, json!({}))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::UnitDispatched, json!({
-            "work_unit_id": "u1"
-        }))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
-            "decision": "accept", "work_unit_id": "u1"
-        }))).unwrap();
+        init_envelope(
+            dir.path(),
+            rid,
+            "sha",
+            "dispatched",
+            ev(EventKind::RunStarted, json!({})),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::UnitDispatched,
+                json!({
+                    "work_unit_id": "u1"
+                }),
+            ),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::Verdict,
+                json!({
+                    "decision": "accept", "work_unit_id": "u1"
+                }),
+            ),
+        )
+        .unwrap();
         let snap = envelope_snapshot(dir.path(), rid).unwrap();
         assert_eq!(snap.units.len(), 1);
         assert_eq!(snap.units[0].state, WorkUnitState::Accepted);
@@ -460,11 +707,26 @@ mod tests {
     fn replay_verdict_for_unknown_unit_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let rid = "wx_ORPHAN";
-        init_envelope(dir.path(), rid, "sha", "dispatched",
-            ev(EventKind::RunStarted, json!({}))).unwrap();
-        append_event(dir.path(), rid, "queued", ev(EventKind::Verdict, json!({
-            "decision": "accept", "work_unit_id": "ghost"
-        }))).unwrap();
+        init_envelope(
+            dir.path(),
+            rid,
+            "sha",
+            "dispatched",
+            ev(EventKind::RunStarted, json!({})),
+        )
+        .unwrap();
+        append_event(
+            dir.path(),
+            rid,
+            "queued",
+            ev(
+                EventKind::Verdict,
+                json!({
+                    "decision": "accept", "work_unit_id": "ghost"
+                }),
+            ),
+        )
+        .unwrap();
         // No unit events at all → replay yields nothing, caller falls back.
         assert!(envelope_snapshot(dir.path(), rid).is_none());
     }

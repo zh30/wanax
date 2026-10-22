@@ -348,13 +348,15 @@ impl Store {
         Ok(())
     }
 
-    pub async fn active_runs_for_repo(&self, repo_root: &str) -> Result<Vec<FactoryRun>, WanaxError> {
-        let rows = sqlx::query(
-            "SELECT * FROM factory_runs WHERE repo_root = ? ORDER BY created_at DESC",
-        )
-        .bind(repo_root)
-        .fetch_all(&self.pool)
-        .await?;
+    pub async fn active_runs_for_repo(
+        &self,
+        repo_root: &str,
+    ) -> Result<Vec<FactoryRun>, WanaxError> {
+        let rows =
+            sqlx::query("SELECT * FROM factory_runs WHERE repo_root = ? ORDER BY created_at DESC")
+                .bind(repo_root)
+                .fetch_all(&self.pool)
+                .await?;
         let mut out = Vec::new();
         for row in rows {
             let run = row_to_run(row)?;

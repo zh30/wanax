@@ -314,8 +314,8 @@ pub fn parse_dispatch(raw: &str) -> Result<(WorkUnitDraft, LlmUsage), WanaxError
 }
 
 pub fn parse_dispatch_plan(raw: &str) -> Result<(DispatchPlan, LlmUsage), WanaxError> {
-    let v: serde_json::Value = serde_json::from_str(raw)
-        .map_err(|_| WanaxError::from_code(ErrorCode::CommanderSchema))?;
+    let v: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| WanaxError::from_code(ErrorCode::CommanderSchema))?;
     let usage = LlmUsage {
         chars_in: 0,
         chars_out: raw.len() as u64,
@@ -403,23 +403,21 @@ pub async fn dispatch_with_retry(
     let mut last = WanaxError::from_code(ErrorCode::CommanderSchema);
     for _ in 0..3 {
         match commander.dispatch_plan(ctx).await {
-            Ok(v) => {
-                match &v.0 {
-                    DispatchPlan::Single(d) if d.title.is_empty() || d.instruction.is_empty() => {
-                        last = WanaxError::from_code(ErrorCode::CommanderSchema);
-                        continue;
-                    }
-                    DispatchPlan::Peers(peers) if peers.is_empty() => {
-                        last = WanaxError::from_code(ErrorCode::CommanderSchema);
-                        continue;
-                    }
-                    DispatchPlan::Dag(units) if units.is_empty() => {
-                        last = WanaxError::from_code(ErrorCode::CommanderSchema);
-                        continue;
-                    }
-                    _ => return Ok(v),
+            Ok(v) => match &v.0 {
+                DispatchPlan::Single(d) if d.title.is_empty() || d.instruction.is_empty() => {
+                    last = WanaxError::from_code(ErrorCode::CommanderSchema);
+                    continue;
                 }
-            }
+                DispatchPlan::Peers(peers) if peers.is_empty() => {
+                    last = WanaxError::from_code(ErrorCode::CommanderSchema);
+                    continue;
+                }
+                DispatchPlan::Dag(units) if units.is_empty() => {
+                    last = WanaxError::from_code(ErrorCode::CommanderSchema);
+                    continue;
+                }
+                _ => return Ok(v),
+            },
             Err(e) if e.code == ErrorCode::CommanderSchema => last = e,
             Err(e) => return Err(e),
         }

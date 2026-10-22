@@ -49,9 +49,9 @@ fn bin_on_path(name: &str) -> bool {
     if name.starts_with('/') {
         return Path::new(name).is_file();
     }
-    std::env::var("PATH").ok().is_some_and(|p| {
-        p.split(':').any(|d| Path::new(d).join(name).is_file())
-    })
+    std::env::var("PATH")
+        .ok()
+        .is_some_and(|p| p.split(':').any(|d| Path::new(d).join(name).is_file()))
 }
 
 /// Tracked files matching any allowed glob (empty → the contract likely
@@ -94,7 +94,11 @@ fn listed_test_names(
     let names = run
         .excerpt
         .lines()
-        .filter_map(|l| l.trim().strip_suffix(": test").map(|s| s.trim().to_string()))
+        .filter_map(|l| {
+            l.trim()
+                .strip_suffix(": test")
+                .map(|s| s.trim().to_string())
+        })
         .collect();
     Ok(Some(names))
 }
@@ -104,7 +108,11 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
     let cfg = load_merged_config(&repo, &opts.data_dir)?;
     let mut items: Vec<Item> = Vec::new();
     let mut push = |level: Level, label: &'static str, message: String| {
-        items.push(Item { level, label, message });
+        items.push(Item {
+            level,
+            label,
+            message,
+        });
     };
 
     // 1. Parse.
@@ -136,16 +144,28 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
         Err(e) => push(Level::Fail, "globs", format!("allowed_globs: {e}")),
     }
     if contract.allowed_globs.is_empty() {
-        push(Level::Fail, "allow", "allowed_globs is empty — nothing a worker may write".into());
+        push(
+            Level::Fail,
+            "allow",
+            "allowed_globs is empty — nothing a worker may write".into(),
+        );
     } else {
         let n = matching_files(&repo, &contract.allowed_globs);
         if n == 0 {
-            push(Level::Warn, "allow", format!(
-                "allowed_globs {} match 0 tracked files — wrong paths?",
-                contract.allowed_globs.join(",")
-            ));
+            push(
+                Level::Warn,
+                "allow",
+                format!(
+                    "allowed_globs {} match 0 tracked files — wrong paths?",
+                    contract.allowed_globs.join(",")
+                ),
+            );
         } else {
-            push(Level::Pass, "allow", format!("allowed_globs cover {n} tracked files"));
+            push(
+                Level::Pass,
+                "allow",
+                format!("allowed_globs cover {n} tracked files"),
+            );
         }
     }
     if allowed_globs_cover_binding_tests(&contract.allowed_globs) {
@@ -154,27 +174,55 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
 
     // 3. Forbidden globs.
     if contract.forbidden_globs.is_empty() {
-        push(Level::Warn, "forbid", "no forbidden_globs — secrets (**.env, credentials) unprotected".into());
+        push(
+            Level::Warn,
+            "forbid",
+            "no forbidden_globs — secrets (**.env, credentials) unprotected".into(),
+        );
     } else if compile_globs(&contract.forbidden_globs).is_err() {
-        push(Level::Fail, "forbid", "forbidden_globs do not compile".into());
+        push(
+            Level::Fail,
+            "forbid",
+            "forbidden_globs do not compile".into(),
+        );
     } else {
-        push(Level::Pass, "forbid", format!("{} forbidden pattern(s)", contract.forbidden_globs.len()));
+        push(
+            Level::Pass,
+            "forbid",
+            format!("{} forbidden pattern(s)", contract.forbidden_globs.len()),
+        );
     }
 
     // 4. test_command binary exists.
-    let first = contract.test_command.split_whitespace().next().unwrap_or("");
+    let first = contract
+        .test_command
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
     if first.is_empty() {
         push(Level::Fail, "test", "test_command is empty".into());
     } else if bin_on_path(first) {
-        push(Level::Pass, "test", format!("test binary `{first}` on PATH"));
+        push(
+            Level::Pass,
+            "test",
+            format!("test binary `{first}` on PATH"),
+        );
     } else {
-        push(Level::Fail, "test", format!("test binary `{first}` not found on PATH"));
+        push(
+            Level::Fail,
+            "test",
+            format!("test binary `{first}` not found on PATH"),
+        );
     }
     if contract.test_timeout_secs < 30 {
-        push(Level::Warn, "test", format!(
-            "test_timeout_secs={} is very short — cargo builds can exceed it",
-            contract.test_timeout_secs
-        ));
+        push(
+            Level::Warn,
+            "test",
+            format!(
+                "test_timeout_secs={} is very short — cargo builds can exceed it",
+                contract.test_timeout_secs
+            ),
+        );
     }
 
     // 5. bound_test criteria: every named test must exist. The same
@@ -185,7 +233,11 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
         .filter_map(|c| c.bound_test.as_deref().map(|t| (c.id.as_str(), t)))
         .collect();
     if bound.is_empty() {
-        push(Level::Warn, "bound", "no bound_test criteria — a green test suite may be vacuous".into());
+        push(
+            Level::Warn,
+            "bound",
+            "no bound_test criteria — a green test suite may be vacuous".into(),
+        );
     } else {
         match listed_test_names(&repo, &contract.test_command, contract.test_timeout_secs)? {
             None => push(Level::Warn, "bound", format!(
@@ -223,7 +275,11 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
             for pat in &cc.must_have_files {
                 let literal = !pat.contains('*') && !pat.contains('?') && !pat.contains('[');
                 if globset::Glob::new(pat).is_err() {
-                    push(Level::Fail, "must", format!("{}: must_have `{pat}` is not a valid glob", cc.id));
+                    push(
+                        Level::Fail,
+                        "must",
+                        format!("{}: must_have `{pat}` is not a valid glob", cc.id),
+                    );
                 } else if literal {
                     match &allowed {
                         Ok(set) if !set.is_match(pat) => push(Level::Fail, "must", format!(
@@ -244,20 +300,36 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
 
     // 6. Intent quality — the parts no machine can enforce, nudged anyway.
     if contract.intent.trim().is_empty() {
-        push(Level::Warn, "intent", "## Intent is empty — the worker has no spec beyond globs".into());
+        push(
+            Level::Warn,
+            "intent",
+            "## Intent is empty — the worker has no spec beyond globs".into(),
+        );
     } else {
-        push(Level::Pass, "intent", format!("intent {} chars", contract.intent.trim().len()));
+        push(
+            Level::Pass,
+            "intent",
+            format!("intent {} chars", contract.intent.trim().len()),
+        );
     }
     if contract.decisions.is_empty() {
-        push(Level::Warn, "intent", "no ## Decisions — ambiguous intent invites rework loops".into());
+        push(
+            Level::Warn,
+            "intent",
+            "no ## Decisions — ambiguous intent invites rework loops".into(),
+        );
     }
 
     // 7. Adapter + config-level issues.
-    let kind = opts
-        .adapter
-        .unwrap_or_else(|| WorkerAdapterKind::parse(&cfg.file.worker.adapter).unwrap_or(WorkerAdapterKind::Fake));
+    let kind = opts.adapter.unwrap_or_else(|| {
+        WorkerAdapterKind::parse(&cfg.file.worker.adapter).unwrap_or(WorkerAdapterKind::Fake)
+    });
     match crate::engine::preflight_adapter(kind, &cfg) {
-        Ok(()) => push(Level::Pass, "adapter", format!("adapter {} available", kind.as_str())),
+        Ok(()) => push(
+            Level::Pass,
+            "adapter",
+            format!("adapter {} available", kind.as_str()),
+        ),
         Err(e) => push(Level::Fail, "adapter", format!("{e}")),
     }
     let egress = wanax_core::egress::EgressMode::parse(&cfg.file.worker.egress);
@@ -266,7 +338,11 @@ pub async fn run(opts: CheckOpts) -> Result<(), WanaxError> {
         && cfg.file.commander.base_url.is_none()
         && cfg.file.inner.base_url.is_none()
     {
-        push(Level::Warn, "egress", "egress=allowlist with no hosts — every outbound call will be denied".into());
+        push(
+            Level::Warn,
+            "egress",
+            "egress=allowlist with no hosts — every outbound call will be denied".into(),
+        );
     }
 
     report(&opts.contract, &items);

@@ -28,7 +28,12 @@ pub async fn run(opts: WatchOpts) -> Result<(), WanaxError> {
         let run = store.get_run(&opts.run_id).await?;
         if last_state != Some(run.state) {
             let spent = wanax_core::money::format_usd(run.spent_usd_micros);
-            println!("[{:.0}s] {} ${}", start.elapsed().as_secs(), run.state.as_str(), spent);
+            println!(
+                "[{:.0}s] {} ${}",
+                start.elapsed().as_secs(),
+                run.state.as_str(),
+                spent
+            );
             last_state = Some(run.state);
         }
         if run.state.is_terminal() {
@@ -42,7 +47,11 @@ pub async fn run(opts: WatchOpts) -> Result<(), WanaxError> {
             };
         }
         if opts.timeout_secs > 0 && start.elapsed().as_secs() >= opts.timeout_secs {
-            eprintln!("watch timed out after {}s (state={})", opts.timeout_secs, run.state.as_str());
+            eprintln!(
+                "watch timed out after {}s (state={})",
+                opts.timeout_secs,
+                run.state.as_str()
+            );
             return Err(wanax_core::error::WanaxError::from_code(
                 wanax_core::error::ErrorCode::WorkerTimeout,
             ));

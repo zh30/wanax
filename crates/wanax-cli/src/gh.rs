@@ -10,8 +10,8 @@ pub fn maybe_create_github_pr(
     run_id: &str,
     cfg: &ResolvedConfig,
 ) -> Result<Option<String>, WanaxError> {
-    let enabled = cfg.file.github.create_pr
-        || std::env::var("WANAX_CREATE_PR").ok().as_deref() == Some("1");
+    let enabled =
+        cfg.file.github.create_pr || std::env::var("WANAX_CREATE_PR").ok().as_deref() == Some("1");
     if !enabled {
         return Ok(None);
     }
@@ -28,9 +28,8 @@ pub fn maybe_create_github_pr(
         return Ok(None);
     }
     let title = format!("wanax: {run_id}");
-    let body = format!(
-        "Automated factory run `{run_id}`. Review branch `{inner_branch}` before merge."
-    );
+    let body =
+        format!("Automated factory run `{run_id}`. Review branch `{inner_branch}` before merge.");
     let out = Command::new("gh")
         .args([
             "pr",

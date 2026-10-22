@@ -109,7 +109,12 @@ pub fn reset_branch(repo: &Path, name: &str, start_sha: &str) -> Result<(), Wana
 pub fn worktree_remove_force(repo: &Path, worktree: &Path) -> Result<(), WanaxError> {
     let ok = run_git_ok(
         repo,
-        &["worktree", "remove", "--force", worktree.to_str().unwrap_or(".")],
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            worktree.to_str().unwrap_or("."),
+        ],
     );
     if ok.is_err() {
         let _ = fs::remove_dir_all(worktree);

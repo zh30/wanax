@@ -360,6 +360,7 @@ Implemented through **v1 / Phase 6** of [`docs/PRD.md`](docs/PRD.md):
 - Commander may be HTTP or a local CLI (`claude_cli` / `codex_cli`); agent-spec plugin runs `lint` + `verify` + `lifecycle`
 - v1.1 hardening: whitelist child env (`[test] pass_env`), per-run `GIT_CONFIG_GLOBAL`, process-group kills, OS sandbox (`[sandbox] seatbelt/bwrap`, `doctor` reports), real claude/codex usage metering, baseline test (`[verify] baseline_test`), concurrent peers, structured commander output
 - v1.2 RSI: `wanax improve` evidence loop, `wanax report` fitness view, `wanax clean` housekeeping; `specs/wanax-self.contract.md` lets Wanax work on itself
+- v1.3 audit & gates: event-sourced `resume` (tombstone replays, DB is a cache), `wanax check`/`audit`/`replay`/`export`/`diff`/`watch` evidence surfaces, `must_have:` + `bound_test:` + diff secret-scan accept gates, egress allowlist/isolated proxy, `[run] notify_cmd`, `[worker] pass_env`, commander prompt artifacts hashed into budget ticks, `wanax.log` lifecycle tracing — all dogfooded against real OpenRouter models
 
 ## Development
 

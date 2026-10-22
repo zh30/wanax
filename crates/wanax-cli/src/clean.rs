@@ -31,10 +31,7 @@ pub async fn run(opts: CleanOpts) -> Result<(), WanaxError> {
         if !r.state.is_terminal() {
             // Non-terminal + dead owner pid = crash orphan, cleanable on
             // request. A live process always wins — never touch it.
-            let dead = r
-                .start_pid
-                .map(|p| !pid_alive(p as u32))
-                .unwrap_or(false);
+            let dead = r.start_pid.map(|p| !pid_alive(p as u32)).unwrap_or(false);
             if !(opts.include_dead && dead) {
                 println!("skip {} (active state={})", r.id, r.state.as_str());
                 continue;
@@ -123,11 +120,7 @@ fn clean_worktrees(repo: &Path, run_id: &str, dry_run: bool) {
 fn clean_branches(repo: &Path, run_id: &str, dry_run: bool) {
     let prefix = format!("refs/heads/wanax/{run_id}/");
     let out = std::process::Command::new("git")
-        .args([
-            "for-each-ref",
-            &prefix,
-            "--format=%(refname:strip=2)",
-        ])
+        .args(["for-each-ref", &prefix, "--format=%(refname:strip=2)"])
         .current_dir(repo)
         .output();
     let Ok(out) = out else { return };

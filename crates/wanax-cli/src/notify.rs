@@ -33,7 +33,10 @@ pub fn fire_if_terminal(repo: &Path, run: &FactoryRun) {
         "WANAX_SPENT_USD".into(),
         format_usd_4(run.spent_usd_micros).trim().to_string(),
     );
-    env.insert("WANAX_ADAPTER".into(), run.worker_adapter.as_str().to_string());
+    env.insert(
+        "WANAX_ADAPTER".into(),
+        run.worker_adapter.as_str().to_string(),
+    );
     if let Some(e) = &run.last_error {
         env.insert("WANAX_LAST_ERROR".into(), e.clone());
     }

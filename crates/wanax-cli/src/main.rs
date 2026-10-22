@@ -242,9 +242,11 @@ async fn run() -> Result<(), WanaxError> {
         Commands::Doctor { fix_lock, strict } => doctor::run(fix_lock, strict, &data_dir).await,
         Commands::Verdict { run_id } => print_verdict(data_dir, run_id).await,
         Commands::Cost { run_id } => print_cost(data_dir, run_id).await,
-        Commands::Report { run_id, json, suggest } => {
-            report::run(data_dir, run_id, json, suggest).await
-        }
+        Commands::Report {
+            run_id,
+            json,
+            suggest,
+        } => report::run(data_dir, run_id, json, suggest).await,
         Commands::Improve {
             contract,
             allow_dirty,
@@ -275,16 +277,41 @@ async fn run() -> Result<(), WanaxError> {
         }
         Commands::Audit { run_id } => audit::run(audit::AuditOpts { run_id, data_dir }).await,
         Commands::Export { run_id, out } => {
-            export::run(export::ExportOpts { run_id, out, data_dir }).await
+            export::run(export::ExportOpts {
+                run_id,
+                out,
+                data_dir,
+            })
+            .await
         }
         Commands::Replay { run_id, json } => {
-            replay_cmd::run(replay_cmd::ReplayCmdOpts { run_id, json, data_dir }).await
+            replay_cmd::run(replay_cmd::ReplayCmdOpts {
+                run_id,
+                json,
+                data_dir,
+            })
+            .await
         }
         Commands::Diff { run_id, patch } => {
-            diff::run(diff::DiffOpts { run_id, patch, data_dir }).await
+            diff::run(diff::DiffOpts {
+                run_id,
+                patch,
+                data_dir,
+            })
+            .await
         }
-        Commands::Watch { run_id, interval_secs, timeout_secs } => {
-            watch::run(watch::WatchOpts { run_id, interval_secs, timeout_secs, data_dir }).await
+        Commands::Watch {
+            run_id,
+            interval_secs,
+            timeout_secs,
+        } => {
+            watch::run(watch::WatchOpts {
+                run_id,
+                interval_secs,
+                timeout_secs,
+                data_dir,
+            })
+            .await
         }
         Commands::Check { contract, adapter } => {
             check::run(check::CheckOpts {
@@ -476,10 +503,9 @@ async fn print_cost(data_dir: PathBuf, run_id: Option<String>) -> Result<(), Wan
             println!("inner_model={}", run.inner_model);
             println!("spent_usd={}", format_usd_4(run.spent_usd_micros));
             println!("spent_turns={}", run.spent_inner_turns);
-            if let Ok(env) = wanax_tombstone::load_envelope(
-                std::path::Path::new(&run.repo_root),
-                &run.id,
-            ) {
+            if let Ok(env) =
+                wanax_tombstone::load_envelope(std::path::Path::new(&run.repo_root), &run.id)
+            {
                 for ev in env
                     .events
                     .iter()

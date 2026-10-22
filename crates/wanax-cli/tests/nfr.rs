@@ -1,9 +1,7 @@
 use std::process::Command;
 use std::time::Instant;
 use tempfile::TempDir;
-use wanax_core::types::{
-    CompletionCriterion, Contract, FactoryRun, RunState, WorkerAdapterKind,
-};
+use wanax_core::types::{CompletionCriterion, Contract, FactoryRun, RunState, WorkerAdapterKind};
 use wanax_core::Store;
 use wanax_tombstone::{init_envelope, persist_envelope, Actor, EventKind};
 

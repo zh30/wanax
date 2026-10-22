@@ -723,7 +723,12 @@ mod tests {
         assert_eq!(commander_cli_bin(&claude), "claude");
         assert_eq!(
             commander_cli_args(&claude),
-            vec!["-p", "--dangerously-skip-permissions", "--output-format", "json"]
+            vec![
+                "-p",
+                "--dangerously-skip-permissions",
+                "--output-format",
+                "json"
+            ]
         );
         let codex = CommanderConfig {
             provider: "codex_cli".into(),

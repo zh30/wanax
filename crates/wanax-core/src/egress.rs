@@ -96,7 +96,11 @@ pub fn host_of_base_url(base_url: &str) -> Option<String> {
         .next()?
         .trim()
         .to_ascii_lowercase();
-    if host.is_empty() { None } else { Some(host) }
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
 }
 
 /// Running proxy; aborts on drop. `port` is where children must point their
@@ -164,7 +168,10 @@ async fn read_head(sock: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     loop {
         let n = sock.read(&mut chunk).await?;
         if n == 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "eof",
+            ));
         }
         buf.extend_from_slice(&chunk[..n]);
         if buf.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -203,10 +210,7 @@ async fn handle_conn(
     if method.eq_ignore_ascii_case("CONNECT") {
         // CONNECT api.x.com:443 — DNS resolves proxy-side; a child with
         // dead DNS can't leak hostnames anywhere else.
-        let host = target
-            .rsplit_once(':')
-            .map(|(h, _)| h)
-            .unwrap_or(target);
+        let host = target.rsplit_once(':').map(|(h, _)| h).unwrap_or(target);
         if !allow.allows(host) {
             on_deny(&format!("egress denied CONNECT {target}"));
             sock.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
@@ -299,11 +303,9 @@ mod tests {
         let mut c = TcpStream::connect(format!("127.0.0.1:{}", proxy.port))
             .await
             .unwrap();
-        c.write_all(
-            format!("CONNECT 127.0.0.1:{up_port} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes(),
-        )
-        .await
-        .unwrap();
+        c.write_all(format!("CONNECT 127.0.0.1:{up_port} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
         let mut resp = [0u8; 256];
         let n = c.read(&mut resp).await.unwrap();
         assert!(String::from_utf8_lossy(&resp[..n]).contains("200"));
