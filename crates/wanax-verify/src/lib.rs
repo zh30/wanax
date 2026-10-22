@@ -35,9 +35,12 @@ pub fn missing_must_have(
     let mut missing = Vec::new();
     for cc in criteria {
         for pat in &cc.must_have_files {
-            let hit = changed
-                .iter()
-                .any(|f| f == pat || globset::Glob::new(pat).map(|g| g.compile_matcher().is_match(f)).unwrap_or(false));
+            let hit = changed.iter().any(|f| {
+                f == pat
+                    || globset::Glob::new(pat)
+                        .map(|g| g.compile_matcher().is_match(f))
+                        .unwrap_or(false)
+            });
             if !hit {
                 missing.push(format!("{}: {}", cc.id, pat));
             }
@@ -114,7 +117,10 @@ fn secret_patterns() -> &'static [(regex::Regex, &'static str)] {
         SECRET_RULES
             .iter()
             .map(|(kind, pat)| {
-                (regex::Regex::new(pat).expect("secret regex compiles"), *kind)
+                (
+                    regex::Regex::new(pat).expect("secret regex compiles"),
+                    *kind,
+                )
             })
             .collect()
     })
@@ -465,9 +471,18 @@ diff --git a/b.rs b/b.rs
 ";
         let f = scan_diff_added(diff);
         assert_eq!(f.len(), 3);
-        assert_eq!((f[0].path.as_str(), f[0].line, f[0].kind), ("a.rs", 2, "aws-access-key"));
-        assert_eq!((f[1].path.as_str(), f[1].line, f[1].kind), ("a.rs", 41, "github-token"));
-        assert_eq!((f[2].path.as_str(), f[2].kind), ("b.rs", "hardcoded-credential"));
+        assert_eq!(
+            (f[0].path.as_str(), f[0].line, f[0].kind),
+            ("a.rs", 2, "aws-access-key")
+        );
+        assert_eq!(
+            (f[1].path.as_str(), f[1].line, f[1].kind),
+            ("a.rs", 41, "github-token")
+        );
+        assert_eq!(
+            (f[2].path.as_str(), f[2].kind),
+            ("b.rs", "hardcoded-credential")
+        );
     }
 
     #[test]

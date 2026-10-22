@@ -61,7 +61,11 @@ fn pattern_probes(pattern: &str) -> Vec<String> {
     if !pattern.contains('*') {
         return vec![pattern.to_string()];
     }
-    let prefix = pattern.split('*').next().unwrap_or("").trim_end_matches('/');
+    let prefix = pattern
+        .split('*')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('/');
     if prefix.is_empty() {
         return vec!["file.rs".into(), "src/file.rs".into(), "a/b/c.rs".into()];
     }

@@ -18,10 +18,10 @@ pub fn can_transition(from: RunState, to: RunState) -> bool {
         (
             RunState::OuterReviewing,
             RunState::Accepted
-                | RunState::Rejected
-                | RunState::Rework
-                | RunState::Escalate
-                | RunState::Dispatched,
+            | RunState::Rejected
+            | RunState::Rework
+            | RunState::Escalate
+            | RunState::Dispatched,
         ) => true,
         (RunState::Rework, RunState::Dispatched) => true,
         (_, RunState::Canceling) => !from.is_terminal(),
@@ -78,6 +78,9 @@ mod tests {
     fn rework_returns_to_dispatched() {
         assert!(can_transition(RunState::Rework, RunState::Dispatched));
         assert!(can_transition(RunState::OuterReviewing, RunState::Rework));
-        assert!(can_transition(RunState::OuterReviewing, RunState::Dispatched));
+        assert!(can_transition(
+            RunState::OuterReviewing,
+            RunState::Dispatched
+        ));
     }
 }

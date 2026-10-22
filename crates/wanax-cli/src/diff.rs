@@ -24,7 +24,10 @@ pub async fn run(opts: DiffOpts) -> Result<(), WanaxError> {
         print!("{out}");
     } else {
         let stat = wanax_git::diff_stat(&repo, &run.base_sha, &branch)?;
-        println!("{branch} (base {})\n{stat}", &run.base_sha[..7.min(run.base_sha.len())]);
+        println!(
+            "{branch} (base {})\n{stat}",
+            &run.base_sha[..7.min(run.base_sha.len())]
+        );
     }
     Ok(())
 }

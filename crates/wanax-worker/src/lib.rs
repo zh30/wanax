@@ -432,7 +432,11 @@ impl WorkerAdapter for OctoscodeAdapter {
             ));
         }
         let started = std::time::Instant::now();
-        let args = vec!["--yolo".to_string(), "--message".to_string(), ctx.instruction.clone()];
+        let args = vec![
+            "--yolo".to_string(),
+            "--message".to_string(),
+            ctx.instruction.clone(),
+        ];
         let mut cmd = spawn_confined(&bin, &args, ctx)?;
         let child = cmd.spawn().map_err(|e| {
             WanaxError::new(
@@ -550,12 +554,10 @@ impl WorkerAdapter for CmdAdapter {
         let mut cmd = spawn_confined(&bin, &self.args, ctx)?;
         cmd.env("WANAX_INSTRUCTION", &ctx.instruction);
         let child = cmd.spawn().map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
-                WanaxError::new(
-                    ErrorCode::AdapterMissing,
-                    format!("adapter binary not found: {}: {e}", self.cmd),
-                )
-            }
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => WanaxError::new(
+                ErrorCode::AdapterMissing,
+                format!("adapter binary not found: {}: {e}", self.cmd),
+            ),
             _ => WanaxError::with_detail(
                 ErrorCode::WorkerCrash,
                 format!("adapter spawn failed: {}: {e}", self.cmd),
@@ -782,10 +784,7 @@ fn parse_claude_json(stdout: &str) -> Option<CliMeter> {
             .and_then(|x| x.as_u64())
             .map(|n| n as u32),
         text: v.get("result").and_then(|x| x.as_str()).map(String::from),
-        is_error: v
-            .get("is_error")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false),
+        is_error: v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false),
     })
 }
 
@@ -802,8 +801,14 @@ fn parse_codex_jsonl(stdout: &str) -> CliMeter {
             Some("turn.completed") => {
                 turns += 1;
                 if let Some(u) = v.get("usage") {
-                    m.usage_in = u.get("input_tokens").and_then(|x| x.as_u64()).or(m.usage_in);
-                    m.usage_out = u.get("output_tokens").and_then(|x| x.as_u64()).or(m.usage_out);
+                    m.usage_in = u
+                        .get("input_tokens")
+                        .and_then(|x| x.as_u64())
+                        .or(m.usage_in);
+                    m.usage_out = u
+                        .get("output_tokens")
+                        .and_then(|x| x.as_u64())
+                        .or(m.usage_out);
                 }
             }
             Some("item.completed")
@@ -1126,7 +1131,10 @@ mod tests {
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let adapter = CodexAdapter::new(script.display().to_string(), Vec::new());
-        adapter.start(&ctx_in(dir.path(), "do the work")).await.unwrap();
+        adapter
+            .start(&ctx_in(dir.path(), "do the work"))
+            .await
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.path().join("stdin.txt")).unwrap(),
             "do the work"
@@ -1160,7 +1168,10 @@ mod tests {
         ctx.timeout_secs = 1;
         let err = adapter.start(&ctx).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::WorkerTimeout);
-        let pid = std::fs::read_to_string(&pidfile).unwrap().trim().to_string();
+        let pid = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .to_string();
         // Poll rather than fixed-sleep: `kill -0` also succeeds on a
         // zombie whose reaper hasn't cleaned up yet (common on loaded
         // CI boxes). Treat zombie state as dead.
@@ -1187,7 +1198,8 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn sandbox_denies_writes_outside_worktree() {
-        if wanax_core::sandbox::detect_backend("auto") == wanax_core::sandbox::SandboxBackend::None {
+        if wanax_core::sandbox::detect_backend("auto") == wanax_core::sandbox::SandboxBackend::None
+        {
             return; // no seatbelt/bwrap on this host
         }
         let dir = tempfile::tempdir().unwrap();

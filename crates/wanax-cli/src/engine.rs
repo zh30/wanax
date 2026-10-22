@@ -12,8 +12,8 @@ use wanax_core::budget::{
 use wanax_core::config::{load_merged_config, WorkerConfig};
 use wanax_core::contract::parse_contract_file;
 use wanax_core::envenv;
-use wanax_core::glob_overlap::peer_glob_sets_overlap;
 use wanax_core::error::{ErrorCode, WanaxError};
+use wanax_core::glob_overlap::peer_glob_sets_overlap;
 use wanax_core::hashutil::sha256_file;
 use wanax_core::ids::new_id;
 use wanax_core::lock::{LockAcquire, RepoLock};
@@ -44,9 +44,8 @@ use wanax_verify::{
     run_test_command, run_verifier_plugins,
 };
 use wanax_worker::{
-    ClaudeAdapter, CmdAdapter, CodexAdapter, FakeAdapter, OctoscodeAdapter, WorkerAdapter,
-    acp::AcpAdapter,
-    WorkerContext,
+    acp::AcpAdapter, ClaudeAdapter, CmdAdapter, CodexAdapter, FakeAdapter, OctoscodeAdapter,
+    WorkerAdapter, WorkerContext,
 };
 
 pub struct StartOpts {
@@ -237,7 +236,10 @@ pub async fn improve(opts: ImproveOpts) -> Result<(), WanaxError> {
     for iteration in 1..=iterations {
         let run_id = new_id();
         let adapter_kind = ladder[(iteration - 1).min(ladder.len() as u32 - 1) as usize];
-        println!("improve iteration={iteration}/{iterations} run_id={run_id} adapter={}", adapter_kind.as_str());
+        println!(
+            "improve iteration={iteration}/{iterations} run_id={run_id} adapter={}",
+            adapter_kind.as_str()
+        );
         let lock = RepoLock::acquire_with(
             &repo,
             &run_id,
@@ -402,9 +404,10 @@ fn learnings_path(repo: &Path) -> PathBuf {
 }
 
 fn contract_label(contract: &Contract) -> String {
-    contract.name.clone().unwrap_or_else(|| {
-        contract.content_sha256.chars().take(8).collect()
-    })
+    contract
+        .name
+        .clone()
+        .unwrap_or_else(|| contract.content_sha256.chars().take(8).collect())
 }
 
 /// Cross-run factory memory: one distilled line per finished run, plus a
@@ -483,12 +486,14 @@ fn append_learning(repo: &Path, run_id: &str, contract_label: &str) {
             if errs != "-" {
                 for c in errs.split(',') {
                     let (code, n) = c.split_once('x').unwrap_or((c, "1"));
-                    *err_hist.entry(code.to_string()).or_default() +=
-                        n.parse::<u32>().unwrap_or(1);
+                    *err_hist.entry(code.to_string()).or_default() += n.parse::<u32>().unwrap_or(1);
                 }
             }
         }
-        if let Some(label) = e.split_whitespace().find_map(|t| t.strip_prefix("contract=")) {
+        if let Some(label) = e
+            .split_whitespace()
+            .find_map(|t| t.strip_prefix("contract="))
+        {
             let en = by_contract.entry(label.to_string()).or_default();
             en.0 += 1;
             if accepted {
@@ -499,10 +504,7 @@ fn append_learning(repo: &Path, run_id: &str, contract_label: &str) {
     let mut text = String::from("# Wanax Learnings\n\n## lifetime\n");
     text.push_str(&format!("runs={n_runs} accepted={n_accepted}\n"));
     if !err_hist.is_empty() {
-        let mut codes: Vec<String> = err_hist
-            .iter()
-            .map(|(k, v)| format!("{k}x{v}"))
-            .collect();
+        let mut codes: Vec<String> = err_hist.iter().map(|(k, v)| format!("{k}x{v}")).collect();
         codes.sort();
         text.push_str(&format!("top_errors: {}\n", codes.join(",")));
     }
@@ -563,9 +565,7 @@ fn compose_rsi_notes(rsi_notes: Option<&str>, repo: &Path) -> Option<String> {
         (None, t) => t,
     };
     match (rsi_notes, learnings) {
-        (Some(n), Some(l)) => Some(format!(
-            "{n}\n\nAccumulated learnings across runs:\n{l}"
-        )),
+        (Some(n), Some(l)) => Some(format!("{n}\n\nAccumulated learnings across runs:\n{l}")),
         (Some(n), None) => Some(n.to_string()),
         (None, Some(l)) => Some(format!("Accumulated learnings across runs:\n{l}")),
         (None, None) => None,
@@ -736,8 +736,7 @@ async fn run_factory(
     let test_env = test_child_env(cfg, &gitconfig, egress.proxy_url.as_deref());
     let inner_sandbox = sandbox_for(cfg, repo, &run.id, &inner_wt, "inner", egress.net)?;
 
-    let mut started_payload =
-        json!({ "base_sha": base_sha, "sandbox": inner_sandbox.backend.as_str(), "adapter": adapter_kind.as_str(), "contract_path": contract.path, "egress": egress.label() });
+    let mut started_payload = json!({ "base_sha": base_sha, "sandbox": inner_sandbox.backend.as_str(), "adapter": adapter_kind.as_str(), "contract_path": contract.path, "egress": egress.label() });
     if let Some(r) = rsi {
         started_payload["iteration"] = json!(r.iteration);
         if let Some(p) = &r.parent_run_id {
@@ -919,10 +918,7 @@ async fn continue_factory(
                 }
             }
             existing = snap.units.clone();
-            if matches!(
-                run.state,
-                RunState::ReceiptReady | RunState::OuterReviewing
-            ) {
+            if matches!(run.state, RunState::ReceiptReady | RunState::OuterReviewing) {
                 if let Some((uid, rid)) = &snap.pending {
                     if let Some(u) = snap.units.iter().find(|x| &x.id == uid) {
                         let receipt = match store.get_receipt(rid).await {
@@ -949,10 +945,7 @@ async fn continue_factory(
         .then(|| existing.clone());
     let unit = existing.last().cloned();
     if pending_outer.is_none()
-        && matches!(
-            run.state,
-            RunState::ReceiptReady | RunState::OuterReviewing
-        )
+        && matches!(run.state, RunState::ReceiptReady | RunState::OuterReviewing)
     {
         if let Some(u) = unit.clone() {
             if let Some(rid) = &u.receipt_id {
@@ -967,7 +960,9 @@ async fn continue_factory(
     // baseline test) resumes here: replay the missing transition.
     let mut run = run;
     if run.state == RunState::ContractReady {
-        store.set_state(&mut run, RunState::Dispatched, None).await?;
+        store
+            .set_state(&mut run, RunState::Dispatched, None)
+            .await?;
     }
     let run_id = run.id.clone();
 
@@ -1120,60 +1115,64 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     gitconfig: &gitconfig,
                     test_env: &test_env,
                     inner_sandbox: &inner_sandbox,
-                proxy_url: proxy_url.as_deref(),
-                net,
+                    proxy_url: proxy_url.as_deref(),
+                    net,
                 })
                 .await
             } else {
-            match next_ready_dag(dags) {
-                Some(mut next) => {
-                    let draft = WorkUnitDraft {
-                        title: next.title.clone(),
-                        instruction: next.instruction.clone(),
-                    };
-                    run_single_unit(InnerSingleParams {
-                        store,
-                        repo,
-                        run: &mut run,
-                        contract: &contract,
-                        cfg,
-                        inner_wt: &inner_wt,
-                        wrapper_dir: &wrapper_dir,
-                        adapter_kind,
-                        base_sha: &base_sha,
-                        unit: Some(&mut next),
-                        draft,
-                        review_client: review_client.as_deref(),
-                        gitconfig: &gitconfig,
-                        test_env: &test_env,
-                        inner_sandbox: &inner_sandbox,
-                    proxy_url: proxy_url.as_deref(),
-                    })
-                    .await
+                match next_ready_dag(dags) {
+                    Some(mut next) => {
+                        let draft = WorkUnitDraft {
+                            title: next.title.clone(),
+                            instruction: next.instruction.clone(),
+                        };
+                        run_single_unit(InnerSingleParams {
+                            store,
+                            repo,
+                            run: &mut run,
+                            contract: &contract,
+                            cfg,
+                            inner_wt: &inner_wt,
+                            wrapper_dir: &wrapper_dir,
+                            adapter_kind,
+                            base_sha: &base_sha,
+                            unit: Some(&mut next),
+                            draft,
+                            review_client: review_client.as_deref(),
+                            gitconfig: &gitconfig,
+                            test_env: &test_env,
+                            inner_sandbox: &inner_sandbox,
+                            proxy_url: proxy_url.as_deref(),
+                        })
+                        .await
+                    }
+                    None if dags.iter().all(|u| u.state == WorkUnitState::Accepted) => {
+                        store.set_state(&mut run, RunState::Accepted, None).await?;
+                        println!("state={}", run.state.as_str());
+                        crate::notify::fire_if_terminal(repo, &run);
+                        tracing::info!(
+                            "run {} accepted spent={}",
+                            run.id,
+                            wanax_core::money::format_usd(run.spent_usd_micros)
+                        );
+                        break Ok(());
+                    }
+                    None => {
+                        break fail_run(
+                            store,
+                            repo,
+                            &mut run,
+                            WanaxError::from_code(ErrorCode::DagCycle),
+                        )
+                        .await;
+                    }
                 }
-                None if dags.iter().all(|u| u.state == WorkUnitState::Accepted) => {
-                    store.set_state(&mut run, RunState::Accepted, None).await?;
-                    println!("state={}", run.state.as_str());
-                    crate::notify::fire_if_terminal(repo, &run);
-                    tracing::info!("run {} accepted spent={}", run.id, wanax_core::money::format_usd(run.spent_usd_micros));
-                    break Ok(());
-                }
-                None => {
-                    break fail_run(
-                        store,
-                        repo,
-                        &mut run,
-                        WanaxError::from_code(ErrorCode::DagCycle),
-                    )
-                    .await;
-                }
-            }
             }
         } else if reuse_existing {
             reuse_existing = false;
-            let mut existing = unit.clone().ok_or_else(|| {
-                WanaxError::from_code(ErrorCode::Resume)
-            })?;
+            let mut existing = unit
+                .clone()
+                .ok_or_else(|| WanaxError::from_code(ErrorCode::Resume))?;
             let draft = WorkUnitDraft {
                 title: existing.title.clone(),
                 instruction: existing.instruction.clone(),
@@ -1255,8 +1254,8 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                         gitconfig: &gitconfig,
                         test_env: &test_env,
                         inner_sandbox: &inner_sandbox,
-                    proxy_url: proxy_url.as_deref(),
-                    net,
+                        proxy_url: proxy_url.as_deref(),
+                        net,
                     })
                     .await
                 }
@@ -1286,7 +1285,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                         gitconfig: &gitconfig,
                         test_env: &test_env,
                         inner_sandbox: &inner_sandbox,
-                    proxy_url: proxy_url.as_deref(),
+                        proxy_url: proxy_url.as_deref(),
                     })
                     .await
                 }
@@ -1496,7 +1495,11 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 bound_ok = false;
                 bound_failing.push(name.to_string());
             }
-            tracing::info!("bound_test {crit_id} name={name} listed={:?} exit={} ok={ok}", listed, t.exit_code);
+            tracing::info!(
+                "bound_test {crit_id} name={name} listed={:?} exit={} ok={ok}",
+                listed,
+                t.exit_code
+            );
             let _ = append_event(
                 repo,
                 &run.id,
@@ -1519,8 +1522,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
         // must_have enforcement: a criterion may name files the solution
         // must produce — "add module X" that never creates X is rework,
         // not accept. Same mechanical class as bound_test.
-        let must_missing =
-            wanax_verify::missing_must_have(&contract.completion_criteria, &changed);
+        let must_missing = wanax_verify::missing_must_have(&contract.completion_criteria, &changed);
         if !must_missing.is_empty() {
             tracing::info!("must_have missing: {}", must_missing.join(", "));
             let _ = append_event(
@@ -1666,7 +1668,10 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
 
         tracing::info!(
             "verdict proposed={} enforced={} outer_exit={} boundary_ok={}",
-            proposed.decision.as_str(), decision.as_str(), outer_code, boundary.ok
+            proposed.decision.as_str(),
+            decision.as_str(),
+            outer_code,
+            boundary.ok
         );
         let mut reason = proposed.reason.clone();
         if note == Some(ErrorCode::AcceptOverride) {
@@ -1763,7 +1768,11 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 store.set_state(&mut run, RunState::Accepted, None).await?;
                 println!("state={}", run.state.as_str());
                 crate::notify::fire_if_terminal(repo, &run);
-                tracing::info!("run {} accepted spent={}", run.id, wanax_core::money::format_usd(run.spent_usd_micros));
+                tracing::info!(
+                    "run {} accepted spent={}",
+                    run.id,
+                    wanax_core::money::format_usd(run.spent_usd_micros)
+                );
                 write_result(
                     repo,
                     &run.id,
@@ -1776,9 +1785,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                 if let Ok(stat) = diff_stat(repo, &base_sha, &receipt.commit_sha) {
                     println!("{stat}");
                 }
-                if let Some(url) =
-                    maybe_create_github_pr(repo, &run.inner_branch, &run.id, cfg)?
-                {
+                if let Some(url) = maybe_create_github_pr(repo, &run.inner_branch, &run.id, cfg)? {
                     let _ = append_event(
                         repo,
                         &run.id,
@@ -1902,10 +1909,7 @@ async fn drive_factory(params: DriveParams<'_>) -> Result<(), WanaxError> {
                     if must_missing.is_empty() {
                         String::new()
                     } else {
-                        format!(
-                            "must_have files not in diff: {}\n",
-                            must_missing.join(", ")
-                        )
+                        format!("must_have files not in diff: {}\n", must_missing.join(", "))
                     }
                 ));
                 store.set_state(&mut run, RunState::Rework, None).await?;
@@ -2062,9 +2066,7 @@ async fn run_single_unit(params: InnerSingleParams<'_>) -> Result<InnerPhaseResu
             }),
         ),
     );
-    store
-        .set_state(run, RunState::InnerWorking, None)
-        .await?;
+    store.set_state(run, RunState::InnerWorking, None).await?;
     println!("state={}", run.state.as_str());
 
     fs::write(inner_wt.join("WORK_UNIT.md"), &u.instruction)
@@ -2073,7 +2075,11 @@ async fn run_single_unit(params: InnerSingleParams<'_>) -> Result<InnerPhaseResu
     run.worker_pid = Some(i64::from(std::process::id()));
     store.save_run_progress(run).await?;
     println!("starting worker pid={}", std::process::id());
-    tracing::info!("worker spawned unit={} adapter={}", u.id, adapter_kind.as_str());
+    tracing::info!(
+        "worker spawned unit={} adapter={}",
+        u.id,
+        adapter_kind.as_str()
+    );
 
     let unit_spec = inner_wt
         .join(".wanax")
@@ -2209,9 +2215,7 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
             }),
         ),
     );
-    store
-        .set_state(run, RunState::InnerWorking, None)
-        .await?;
+    store.set_state(run, RunState::InnerWorking, None).await?;
     println!("state={}", run.state.as_str());
 
     run.worker_pid = Some(i64::from(std::process::id()));
@@ -2284,9 +2288,7 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
             ),
         );
 
-        let fake_src = repo
-            .join(".wanax")
-            .join(format!("fake-peer-{seq}.toml"));
+        let fake_src = repo.join(".wanax").join(format!("fake-peer-{seq}.toml"));
         if fake_src.is_file() {
             let dest_dir = peer_wt.join(".wanax");
             fs::create_dir_all(&dest_dir)
@@ -2298,14 +2300,7 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
         fs::write(peer_wt.join("WORK_UNIT.md"), &peer.instruction)
             .map_err(|e| WanaxError::with_detail(ErrorCode::WorkerCrash, e))?;
 
-        let peer_spec = sandbox_for(
-            cfg,
-            repo,
-            &run.id,
-            &peer_wt,
-            &format!("peer-{seq}"),
-            net,
-        )?;
+        let peer_spec = sandbox_for(cfg, repo, &run.id, &peer_wt, &format!("peer-{seq}"), net)?;
         let ctx = WorkerContext {
             run_id: run.id.clone(),
             work_unit_id: peer_unit.id.clone(),
@@ -2337,7 +2332,10 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
         let worker = cfg.file.worker.clone();
         kept.push(pr);
         join.spawn(async move {
-            (i, start_adapter(adapter_kind, &worker, &ctx, &spec_path, 0, 1).await)
+            (
+                i,
+                start_adapter(adapter_kind, &worker, &ctx, &spec_path, 0, 1).await,
+            )
         });
     }
     let mut handles: Vec<Option<Result<wanax_worker::WorkerHandle, WanaxError>>> =
@@ -2354,8 +2352,7 @@ async fn run_peer_batch(params: PeerBatchParams<'_>) -> Result<InnerPhaseResult,
     // Phase 3 (serial): account turns/cost, collect receipts in seq order.
     let mut peer_commits = Vec::new();
     for (pr, handle) in kept.into_iter().zip(handles) {
-        let handle = handle
-            .ok_or_else(|| WanaxError::from_code(ErrorCode::WorkerCrash))??;
+        let handle = handle.ok_or_else(|| WanaxError::from_code(ErrorCode::WorkerCrash))??;
         add_turns(run, handle.turns);
         charge_handle_usage(store, repo, run, cfg, &handle).await?;
         store.save_run_progress(run).await?;
@@ -2609,10 +2606,7 @@ async fn seed_dag_units(
     }
     let mut out = Vec::new();
     for (deps, mut unit) in created {
-        unit.depends_on = deps
-            .iter()
-            .filter_map(|k| by_key.get(k).cloned())
-            .collect();
+        unit.depends_on = deps.iter().filter_map(|k| by_key.get(k).cloned()).collect();
         store.insert_work_unit(&unit).await?;
         // Replay-complete evidence: the envelope alone must be enough to
         // rebuild the dag set after a crash.
@@ -2850,7 +2844,10 @@ async fn start_adapter(
     }
 }
 
-pub(crate) fn preflight_adapter(adapter_kind: WorkerAdapterKind, cfg: &ResolvedConfig) -> Result<(), WanaxError> {
+pub(crate) fn preflight_adapter(
+    adapter_kind: WorkerAdapterKind,
+    cfg: &ResolvedConfig,
+) -> Result<(), WanaxError> {
     if !adapter_kind.is_supported() {
         return Err(WanaxError::new(
             ErrorCode::AdapterMissing,
@@ -3041,8 +3038,7 @@ async fn charge_handle_usage(
     cfg: &ResolvedConfig,
     handle: &wanax_worker::WorkerHandle,
 ) -> Result<(), WanaxError> {
-    if handle.cost_usd_micros.is_none() && handle.usage_in.is_none() && handle.usage_out.is_none()
-    {
+    if handle.cost_usd_micros.is_none() && handle.usage_in.is_none() && handle.usage_out.is_none() {
         return Ok(());
     }
     let usage = LlmUsage {
@@ -3097,7 +3093,11 @@ async fn charge_and_tick(
     // run artifact and hash-link it into this event.
     if let Some(prompt) = &usage.prompt_in {
         if let Some(label) = prompt_label {
-            let dir = repo.join(".wanax").join("runs").join(&run.id).join("prompts");
+            let dir = repo
+                .join(".wanax")
+                .join("runs")
+                .join(&run.id)
+                .join("prompts");
             let _ = fs::create_dir_all(&dir);
             let n = fs::read_dir(&dir).map(|r| r.flatten().count()).unwrap_or(0) + 1;
             let file = format!("{label}-{n}.txt");

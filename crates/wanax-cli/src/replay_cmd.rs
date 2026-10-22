@@ -22,7 +22,11 @@ pub struct ReplayCmdOpts {
 fn unit_diffs(db: &WorkUnit, rp: &WorkUnit) -> Vec<String> {
     let mut d = Vec::new();
     if db.state != rp.state {
-        d.push(format!("state {} -> {}", db.state.as_str(), rp.state.as_str()));
+        d.push(format!(
+            "state {} -> {}",
+            db.state.as_str(),
+            rp.state.as_str()
+        ));
     }
     if db.rework_count != rp.rework_count {
         d.push(format!("rework {} -> {}", db.rework_count, rp.rework_count));
@@ -43,7 +47,10 @@ pub async fn run(opts: ReplayCmdOpts) -> Result<(), WanaxError> {
     let db_units = store.work_units_for_run(&opts.run_id).await?;
 
     let Some(snap) = envelope_snapshot(&repo, &opts.run_id) else {
-        println!("replay {opts_id}: envelope has no replayable unit events", opts_id = opts.run_id);
+        println!(
+            "replay {opts_id}: envelope has no replayable unit events",
+            opts_id = opts.run_id
+        );
         println!("(pre-envelope-era run or no units dispatched — DB path is authoritative)");
         return Ok(());
     };
@@ -85,7 +92,11 @@ pub async fn run(opts: ReplayCmdOpts) -> Result<(), WanaxError> {
         return Ok(());
     }
 
-    println!("replay {} — {} unit(s) reconstructed", opts.run_id, snap.units.len());
+    println!(
+        "replay {} — {} unit(s) reconstructed",
+        opts.run_id,
+        snap.units.len()
+    );
     for u in &snap.units {
         let receipt = snap.receipts.get(&u.id);
         let globs = u
@@ -101,9 +112,17 @@ pub async fn run(opts: ReplayCmdOpts) -> Result<(), WanaxError> {
             u.rework_count,
             u.title,
             receipt
-                .map(|r| format!("  [receipt {} exit={}]", &r.commit_sha[..7.min(r.commit_sha.len())], r.test_exit_code))
+                .map(|r| format!(
+                    "  [receipt {} exit={}]",
+                    &r.commit_sha[..7.min(r.commit_sha.len())],
+                    r.test_exit_code
+                ))
                 .unwrap_or_default(),
-            if globs.is_empty() { String::new() } else { format!("  globs={globs}") },
+            if globs.is_empty() {
+                String::new()
+            } else {
+                format!("  globs={globs}")
+            },
         );
     }
     if let Some((u, r)) = &snap.pending {
@@ -112,7 +131,10 @@ pub async fn run(opts: ReplayCmdOpts) -> Result<(), WanaxError> {
     if diffs.is_empty() {
         println!("divergence: none — DB cache matches the envelope");
     } else {
-        println!("divergence: {} — resume would heal these from the envelope:", diffs.len());
+        println!(
+            "divergence: {} — resume would heal these from the envelope:",
+            diffs.len()
+        );
         for d in &diffs {
             println!("  {} {}", d["unit"], d["detail"]);
         }

@@ -78,7 +78,10 @@ mod tests {
         }
         let env = base_child_env();
         assert!(!env_has_forbidden(&env));
-        assert_eq!(env.get("GIT_TERMINAL_PROMPT").map(String::as_str), Some("0"));
+        assert_eq!(
+            env.get("GIT_TERMINAL_PROMPT").map(String::as_str),
+            Some("0")
+        );
         for k in FORBIDDEN_ENV {
             std::env::remove_var(k);
         }
@@ -104,6 +107,9 @@ mod tests {
             env.get("GIT_CONFIG_GLOBAL").map(String::as_str),
             Some("/repo/.wanax/gitconfig")
         );
-        assert_eq!(env.get("GIT_CONFIG_NOSYSTEM").map(String::as_str), Some("1"));
+        assert_eq!(
+            env.get("GIT_CONFIG_NOSYSTEM").map(String::as_str),
+            Some("1")
+        );
     }
 }

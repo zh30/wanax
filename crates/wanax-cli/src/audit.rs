@@ -28,17 +28,26 @@ fn verify_envelope(env: &TombstoneEnvelope) -> Vec<Issue> {
     if env.schema_version != SCHEMA_VERSION {
         issues.push(Issue {
             fail: false,
-            what: format!("schema_version {} != {}", env.schema_version, SCHEMA_VERSION),
+            what: format!(
+                "schema_version {} != {}",
+                env.schema_version, SCHEMA_VERSION
+            ),
         });
     }
     if env.events.is_empty() {
-        issues.push(Issue { fail: true, what: "envelope has no events".into() });
+        issues.push(Issue {
+            fail: true,
+            what: "envelope has no events".into(),
+        });
         return issues;
     }
     if env.events[0].kind != EventKind::RunStarted {
         issues.push(Issue {
             fail: true,
-            what: format!("first event is {}, not run_started", env.events[0].kind.as_str()),
+            what: format!(
+                "first event is {}, not run_started",
+                env.events[0].kind.as_str()
+            ),
         });
     }
     let mut ids = HashSet::new();
@@ -73,7 +82,10 @@ fn verify_envelope(env: &TombstoneEnvelope) -> Vec<Issue> {
     match st {
         None => issues.push(Issue {
             fail: true,
-            what: format!("current_state {:?} is not a valid run state", env.current_state),
+            what: format!(
+                "current_state {:?} is not a valid run state",
+                env.current_state
+            ),
         }),
         Some(s) if s.is_terminal() => {
             let terminal_ev = env.events.iter().any(|e| {
@@ -138,14 +150,20 @@ pub async fn run(opts: AuditOpts) -> Result<(), WanaxError> {
     // that never dispatched — it is a superset of in-flight work, DB may
     // hold units the envelope never saw on very old runs → warn only).
     let snap = replay::envelope_snapshot(&repo, &opts.run_id);
-    let db_units = store.work_units_for_run(&opts.run_id).await.unwrap_or_default();
+    let db_units = store
+        .work_units_for_run(&opts.run_id)
+        .await
+        .unwrap_or_default();
     if let Some(snap) = &snap {
         let db_ids: HashSet<&str> = db_units.iter().map(|u| u.id.as_str()).collect();
         for u in &snap.units {
             if !db_ids.contains(u.id.as_str()) {
                 issues.push(Issue {
                     fail: false,
-                    what: format!("unit {} present in envelope replay but missing from DB", u.id),
+                    what: format!(
+                        "unit {} present in envelope replay but missing from DB",
+                        u.id
+                    ),
                 });
             }
         }
@@ -168,7 +186,11 @@ pub async fn run(opts: AuditOpts) -> Result<(), WanaxError> {
             "integrity: OK — {} event(s), {} unit(s) replayed{}",
             env.events.len(),
             snap.map(|s| s.units.len()).unwrap_or(0),
-            if warns > 0 { format!(", {warns} warning(s)") } else { String::new() }
+            if warns > 0 {
+                format!(", {warns} warning(s)")
+            } else {
+                String::new()
+            }
         );
         return Ok(());
     }

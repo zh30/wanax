@@ -36,8 +36,16 @@ pub async fn run(opts: ExportOpts) -> Result<(), WanaxError> {
     };
 
     // Tombstone pair — the audit record itself.
-    copy(&envelope_path(&repo, &opts.run_id), "envelope.json", &mut files);
-    copy(&markdown_path(&repo, &opts.run_id), "TOMBSTONE.md", &mut files);
+    copy(
+        &envelope_path(&repo, &opts.run_id),
+        "envelope.json",
+        &mut files,
+    );
+    copy(
+        &markdown_path(&repo, &opts.run_id),
+        "TOMBSTONE.md",
+        &mut files,
+    );
 
     // Frozen contract (DB row knows its repo-relative path).
     if let Ok(c) = store.get_contract(&run.contract_id).await {
@@ -57,7 +65,9 @@ pub async fn run(opts: ExportOpts) -> Result<(), WanaxError> {
     // The actual product: diff of the inner branch against the base.
     let mut inner_included = false;
     if ref_exists(&repo, &format!("wanax/{}/inner", run.id)) {
-        if let Ok(diff) = wanax_git::diff_patch(&repo, &run.base_sha, &format!("wanax/{}/inner", run.id)) {
+        if let Ok(diff) =
+            wanax_git::diff_patch(&repo, &run.base_sha, &format!("wanax/{}/inner", run.id))
+        {
             if std::fs::write(out_dir.join("inner.diff"), &diff).is_ok() {
                 files.push("inner.diff".into());
                 inner_included = true;
@@ -66,7 +76,11 @@ pub async fn run(opts: ExportOpts) -> Result<(), WanaxError> {
     }
 
     // Cross-run memory — the context the run operated under.
-    copy(&repo.join(".wanax/LEARNINGS.md"), "LEARNINGS.md", &mut files);
+    copy(
+        &repo.join(".wanax/LEARNINGS.md"),
+        "LEARNINGS.md",
+        &mut files,
+    );
 
     let env = load_envelope(&repo, &opts.run_id).ok();
     let verdicts: Vec<String> = env
@@ -76,7 +90,10 @@ pub async fn run(opts: ExportOpts) -> Result<(), WanaxError> {
                 .iter()
                 .filter(|ev| ev.kind.as_str() == "verdict")
                 .filter_map(|ev| {
-                    ev.payload.get("decision").and_then(|d| d.as_str()).map(str::to_string)
+                    ev.payload
+                        .get("decision")
+                        .and_then(|d| d.as_str())
+                        .map(str::to_string)
                 })
                 .collect()
         })
@@ -102,6 +119,10 @@ pub async fn run(opts: ExportOpts) -> Result<(), WanaxError> {
     .map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
 
     println!("exported {}", out_dir.display());
-    println!("manifest: {} files, state={}", files.len() + 1, run.state.as_str());
+    println!(
+        "manifest: {} files, state={}",
+        files.len() + 1,
+        run.state.as_str()
+    );
     Ok(())
 }

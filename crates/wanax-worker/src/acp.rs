@@ -20,7 +20,10 @@ pub struct AcpAdapter {
 
 impl AcpAdapter {
     pub fn new(bin: impl Into<String>, extra_args: Vec<String>) -> Self {
-        Self { bin: bin.into(), extra_args }
+        Self {
+            bin: bin.into(),
+            extra_args,
+        }
     }
 
     pub fn resolve_bin(&self) -> Result<PathBuf, WanaxError> {
@@ -124,8 +127,8 @@ pub async fn run_prompt(
     };
     let mut session_id: Option<String> = None;
     let mut prompt_id: Option<u64> = None;
-    let deadline = tokio::time::Instant::now()
-        + std::time::Duration::from_secs(u64::from(ctx.timeout_secs));
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(u64::from(ctx.timeout_secs));
     // Read until the prompt response lands; permission requests get the
     // first "allow"-ish option — the OS sandbox is the real boundary.
     while out.stop_reason.is_none() {
@@ -143,7 +146,9 @@ pub async fn run_prompt(
         };
         transcript.push_str(&line);
         transcript.push('\n');
-        let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
             match method {
                 "session/update" => {
@@ -159,12 +164,14 @@ pub async fn run_prompt(
                             }
                         }
                         Some("usage_update") | Some("usage") => {
-                            if let Some(u) = upd["usage"]["usedTokens"].as_u64()
+                            if let Some(u) = upd["usage"]["usedTokens"]
+                                .as_u64()
                                 .or_else(|| upd["usedTokens"].as_u64())
                             {
                                 out.usage_out = Some(u);
                             }
-                            if let Some(a) = upd["cost"]["amount"].as_f64()
+                            if let Some(a) = upd["cost"]["amount"]
+                                .as_f64()
                                 .or_else(|| upd["usage"]["cost"]["amount"].as_f64())
                             {
                                 out.cost_usd_micros = Some((a * 1e6) as i64);
@@ -270,7 +277,13 @@ impl crate::WorkerAdapter for AcpAdapter {
             test_excerpt: {
                 let mut t = out.text.clone();
                 t.push_str(&out.transcript);
-                t.chars().rev().take(8000).collect::<String>().chars().rev().collect()
+                t.chars()
+                    .rev()
+                    .take(8000)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect()
             },
             duration_ms: started.elapsed().as_millis() as u64,
             turns: 1,

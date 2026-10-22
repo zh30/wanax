@@ -82,7 +82,10 @@ impl CliCommander {
         let mut child = cmd.spawn().map_err(|e| {
             WanaxError::new(
                 ErrorCode::AdapterMissing,
-                format!("commander cli binary not found: {}: {e}", self.bin.display()),
+                format!(
+                    "commander cli binary not found: {}: {e}",
+                    self.bin.display()
+                ),
             )
         })?;
         if let Some(mut stdin) = child.stdin.take() {
@@ -182,7 +185,8 @@ fn isolated_scratch() -> Result<PathBuf, WanaxError> {
     let dir = std::env::temp_dir().join(format!("wanax-commander-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
     // Stop git / coding CLIs from walking up into the user's repository.
-    std::fs::create_dir_all(dir.join(".git")).map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
+    std::fs::create_dir_all(dir.join(".git"))
+        .map_err(|e| WanaxError::with_detail(ErrorCode::Db, e))?;
     Ok(dir)
 }
 
@@ -298,9 +302,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, "{\"title\":\"t\"}");
-        let err = unwrap_cli_json_envelope(
-            "{\"result\":\"denied\",\"is_error\":true}",
-        );
+        let err = unwrap_cli_json_envelope("{\"result\":\"denied\",\"is_error\":true}");
         assert!(err.is_err());
         // Plain text (codex, or claude without json flag) passes through.
         assert_eq!(

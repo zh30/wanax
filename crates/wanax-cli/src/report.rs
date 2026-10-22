@@ -150,14 +150,12 @@ fn parent_chain(repo_root: &std::path::Path, run_id: &str) -> Vec<String> {
     for _ in 0..8 {
         let Some(id) = cur else { break };
         chain.push(id.clone());
-        cur = load_envelope(repo_root, &id)
-            .ok()
-            .and_then(|env| {
-                env.events
-                    .iter()
-                    .find(|e| e.kind == EventKind::RunStarted)
-                    .and_then(|e| e.payload["parent_run_id"].as_str().map(String::from))
-            });
+        cur = load_envelope(repo_root, &id).ok().and_then(|env| {
+            env.events
+                .iter()
+                .find(|e| e.kind == EventKind::RunStarted)
+                .and_then(|e| e.payload["parent_run_id"].as_str().map(String::from))
+        });
         // Guard against self-referencing cycles.
         if cur.as_deref() == Some(id.as_str()) {
             break;
@@ -185,10 +183,7 @@ fn print_detail(run: &FactoryRun, f: &Fitness, repo_root: &std::path::Path) {
         None => println!("baseline_exit=-"),
     }
     // Accepted on an already-green baseline → possibly vacuous; flag it.
-    let baseline_green = f
-        .verdict_baseline
-        .or(f.baseline_exit)
-        .map(|b| b == 0);
+    let baseline_green = f.verdict_baseline.or(f.baseline_exit).map(|b| b == 0);
     if let Some(g) = baseline_green {
         println!("baseline_green={g}");
     }
@@ -289,8 +284,7 @@ pub async fn run(
                 let f = mine(std::path::Path::new(&run.repo_root), &run.id);
                 for c in &f.error_codes {
                     let (code, n) = c.split_once('x').unwrap_or((c.as_str(), "1"));
-                    *errors.entry(code.to_string()).or_default() +=
-                        n.parse::<u32>().unwrap_or(1);
+                    *errors.entry(code.to_string()).or_default() += n.parse::<u32>().unwrap_or(1);
                 }
                 if run.state.is_terminal() {
                     n_finished += 1;
@@ -321,11 +315,8 @@ pub async fn run(
                             e.vacuous_accepts += 1;
                         }
                     }
-                    e.reworks += f
-                        .verdicts
-                        .iter()
-                        .filter(|v| v.as_str() == "rework")
-                        .count() as u32;
+                    e.reworks +=
+                        f.verdicts.iter().filter(|v| v.as_str() == "rework").count() as u32;
                     if !f.boundary_paths.is_empty() {
                         e.boundary += 1;
                     }
@@ -412,7 +403,10 @@ pub async fn run(
             let mut contracts: Vec<String> = by_contract
                 .iter()
                 .map(|(k, s)| {
-                    format!("{k}: {}/{} accepted [{}]", s.accepted, s.finished, s.history)
+                    format!(
+                        "{k}: {}/{} accepted [{}]",
+                        s.accepted, s.finished, s.history
+                    )
                 })
                 .collect();
             contracts.sort();

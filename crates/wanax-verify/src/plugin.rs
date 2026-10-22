@@ -205,13 +205,7 @@ mod tests {
             command_args("lint", spec, code),
             vec!["lint".to_string(), "/tmp/task.spec".into()]
         );
-        assert_eq!(
-            command_args("verify", spec, code)[0],
-            "verify"
-        );
-        assert_eq!(
-            command_args("lifecycle", spec, code)[0],
-            "lifecycle"
-        );
+        assert_eq!(command_args("verify", spec, code)[0], "verify");
+        assert_eq!(command_args("lifecycle", spec, code)[0], "lifecycle");
     }
 }

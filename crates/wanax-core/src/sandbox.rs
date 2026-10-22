@@ -197,7 +197,10 @@ pub fn resolve(
 }
 
 fn seatbelt_escape(path: &Path) -> String {
-    path.display().to_string().replace('\\', "\\\\").replace('"', "\\\"")
+    path.display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
 }
 
 pub fn seatbelt_profile_text(spec: &SandboxSpec) -> String {
@@ -257,9 +260,10 @@ pub fn wrap(
             let bin = bin_on_path("sandbox-exec").ok_or_else(|| {
                 WanaxError::new(ErrorCode::AdapterMissing, "sandbox-exec not found")
             })?;
-            let profile = spec.seatbelt_profile.clone().ok_or_else(|| {
-                WanaxError::new(ErrorCode::Db, "seatbelt profile missing")
-            })?;
+            let profile = spec
+                .seatbelt_profile
+                .clone()
+                .ok_or_else(|| WanaxError::new(ErrorCode::Db, "seatbelt profile missing"))?;
             let mut argv = vec![
                 "-f".to_string(),
                 profile.display().to_string(),
@@ -269,9 +273,8 @@ pub fn wrap(
             Ok((bin, argv))
         }
         SandboxBackend::Bwrap => {
-            let bin = bin_on_path("bwrap").ok_or_else(|| {
-                WanaxError::new(ErrorCode::AdapterMissing, "bwrap not found")
-            })?;
+            let bin = bin_on_path("bwrap")
+                .ok_or_else(|| WanaxError::new(ErrorCode::AdapterMissing, "bwrap not found"))?;
             let mut argv: Vec<String> = vec![
                 "--die-with-parent".into(),
                 "--new-session".into(),
@@ -311,7 +314,14 @@ mod tests {
 
     #[test]
     fn off_mode_resolves_to_none() {
-        let spec = resolve("off", vec![PathBuf::from("/x")], &[], None, NetConfine::Open).unwrap();
+        let spec = resolve(
+            "off",
+            vec![PathBuf::from("/x")],
+            &[],
+            None,
+            NetConfine::Open,
+        )
+        .unwrap();
         assert_eq!(spec.backend, SandboxBackend::None);
         let (prog, argv) = wrap(&spec, Path::new("/bin/echo"), &["hi".into()]).unwrap();
         assert_eq!(prog, PathBuf::from("/bin/echo"));

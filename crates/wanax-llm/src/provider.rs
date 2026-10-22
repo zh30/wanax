@@ -170,7 +170,9 @@ pub fn parse_responses_body(value: &Value) -> Result<Completion, WanaxError> {
     Ok(Completion {
         text,
         prompt_tokens: value.pointer("/usage/input_tokens").and_then(Value::as_u64),
-        completion_tokens: value.pointer("/usage/output_tokens").and_then(Value::as_u64),
+        completion_tokens: value
+            .pointer("/usage/output_tokens")
+            .and_then(Value::as_u64),
     })
 }
 

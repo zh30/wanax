@@ -26,8 +26,8 @@ pub use config::{
 };
 pub use contract::{parse_contract_bytes, parse_contract_file};
 pub use error::{ErrorCode, WanaxError};
-pub use ids::{is_valid_id, new_id, validate_id};
 pub use glob_overlap::{find_peer_overlap, peer_glob_sets_overlap};
+pub use ids::{is_valid_id, new_id, validate_id};
 pub use lock::{
     clear_stale_lock, inspect_lock, inspect_locks, list_holders, pid_alive, read_lock,
     release_run_lock, LockAcquire, RepoLock,
