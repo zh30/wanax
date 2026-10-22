@@ -2366,8 +2366,10 @@ fn egress_allowlist_confines_worker_network() {
 
     // The inner sandbox profile denies outbound except the local proxy —
     // the `.sb` artifact is Seatbelt-only (bwrap confinement is argv).
+    // Skipped when WANAX_SANDBOXED: a nested run's own sandbox layer is
+    // off by design (the parent's confinement still holds).
     #[cfg(target_os = "macos")]
-    {
+    if std::env::var_os("WANAX_SANDBOXED").is_none() {
         let runs = h.path().join(".wanax/runs");
         let profile = fs::read_dir(&runs)
             .unwrap()
@@ -2411,7 +2413,7 @@ fn egress_isolated_denies_all_network() {
     );
     assert!(out.stdout.contains("state=accepted"), "{}", out.stdout);
     #[cfg(target_os = "macos")]
-    {
+    if std::env::var_os("WANAX_SANDBOXED").is_none() {
         let runs = h.path().join(".wanax/runs");
         let profile = fs::read_dir(&runs)
             .unwrap()
