@@ -54,6 +54,18 @@ Accept requires all of: outer `test_command` exit 0, files inside `allowed_globs
 
 ## Install
 
+Prebuilt binary ([releases](https://github.com/zh30/wanax/releases) — Linux x86_64, macOS aarch64):
+
+```bash
+TRIPLE=x86_64-unknown-linux-gnu   # or aarch64-apple-darwin
+curl -LO https://github.com/zh30/wanax/releases/download/v1.0.0/wanax-$TRIPLE
+curl -LO https://github.com/zh30/wanax/releases/download/v1.0.0/wanax-$TRIPLE.sha256
+shasum -a 256 -c wanax-$TRIPLE.sha256
+chmod +x wanax-$TRIPLE && sudo mv wanax-$TRIPLE /usr/local/bin/wanax
+```
+
+From source:
+
 ```bash
 git clone https://github.com/zh30/wanax.git
 cd wanax
