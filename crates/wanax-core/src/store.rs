@@ -569,3 +569,182 @@ fn row_to_verdict(row: sqlx::sqlite::SqliteRow) -> Result<Verdict, WanaxError> {
         created_at: row.try_get("created_at")?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::CompletionCriterion;
+
+    async fn open_temp() -> Store {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("wanax.db");
+        let store = Store::open(&db).await.unwrap();
+        // Keep the tempdir alive for the Store's lifetime by leaking it:
+        // each test owns one db and the process exits at the end of the test.
+        std::mem::forget(dir);
+        store
+    }
+
+    fn mk_contract(id: &str) -> Contract {
+        Contract {
+            id: id.to_string(),
+            path: "specs/mul.contract.md".to_string(),
+            content_sha256: "abc123".to_string(),
+            intent: "multiply two numbers".to_string(),
+            decisions: vec!["use i64".to_string()],
+            allowed_globs: vec!["src/**".to_string()],
+            forbidden_globs: vec!["secrets/**".to_string()],
+            forbidden_rules: vec!["no unwrap in lib".to_string()],
+            completion_criteria: vec![CompletionCriterion {
+                id: "cc-01".to_string(),
+                statement: "mul returns the product".to_string(),
+                bound_test: Some("mul_basic".to_string()),
+                must_have_files: vec!["src/mul.rs".to_string()],
+            }],
+            test_command: "cargo test".to_string(),
+            test_timeout_secs: 60,
+            name: Some("mul".to_string()),
+            agent_spec: Some("inner agent".to_string()),
+        }
+    }
+
+    fn mk_run(id: &str) -> FactoryRun {
+        FactoryRun {
+            id: id.to_string(),
+            repo_root: "/tmp/repo".to_string(),
+            contract_id: "c1".to_string(),
+            contract_sha256: "abc123".to_string(),
+            state: RunState::Draft,
+            base_sha: "deadbeef".to_string(),
+            inner_branch: format!("wanax/{id}/inner"),
+            outer_branch: format!("wanax/{id}/outer"),
+            commander_model: "commander-a".to_string(),
+            inner_model: "inner-a".to_string(),
+            reviewer_model: Some("reviewer-a".to_string()),
+            max_usd_micros: 5_000_000,
+            max_inner_turns: 40,
+            spent_usd_micros: 0,
+            spent_inner_turns: 0,
+            worker_adapter: WorkerAdapterKind::Cmd,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+            finished_at: None,
+            last_error: None,
+            worker_pid: None,
+            start_pid: Some(42),
+        }
+    }
+
+    fn mk_unit(id: &str, run_id: &str) -> WorkUnit {
+        WorkUnit {
+            id: id.to_string(),
+            run_id: run_id.to_string(),
+            seq: 1,
+            title: "implement mul".to_string(),
+            instruction: "write the function".to_string(),
+            state: WorkUnitState::Queued,
+            assignee_role: AssigneeRole::Master,
+            parent_id: None,
+            allowed_globs: Some(vec!["src/**".to_string()]),
+            depends_on: vec!["setup".to_string()],
+            test_command: Some("cargo test mul".to_string()),
+            local_key: Some("k1".to_string()),
+            rework_count: 0,
+            inner_commit_sha: None,
+            receipt_id: None,
+            verdict_id: None,
+        }
+    }
+
+    fn mk_verdict(id: &str, work_unit_id: &str, reason: &str, created_at: &str) -> Verdict {
+        Verdict {
+            id: id.to_string(),
+            work_unit_id: work_unit_id.to_string(),
+            decision: VerdictDecision::Reject,
+            reason: reason.to_string(),
+            outer_test_exit_code: 1,
+            outer_test_excerpt: "failed".to_string(),
+            boundary_ok: false,
+            files_reviewed: vec!["src/mul.rs".to_string()],
+            commander_model: "commander-a".to_string(),
+            created_at: created_at.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn contract_insert_get_roundtrip() {
+        let store = open_temp().await;
+        let c = mk_contract("c1");
+        store.insert_contract(&c).await.unwrap();
+        let got = store.get_contract("c1").await.unwrap();
+        assert_eq!(got.id, c.id);
+        assert_eq!(got.intent, "multiply two numbers");
+        assert_eq!(got.test_command, "cargo test");
+        assert_eq!(got.decisions, c.decisions);
+        assert_eq!(got.name.as_deref(), Some("mul"));
+    }
+
+    #[tokio::test]
+    async fn run_insert_get_roundtrip() {
+        let store = open_temp().await;
+        let r = mk_run("r1");
+        store.insert_run(&r).await.unwrap();
+        let got = store.get_run("r1").await.unwrap();
+        assert_eq!(got.state, RunState::Draft);
+        assert_eq!(got.id, "r1");
+        assert_eq!(got.repo_root, "/tmp/repo");
+        let listed = store.list_runs().await.unwrap();
+        assert!(listed.iter().any(|x| x.id == "r1"));
+        assert_eq!(listed.iter().find(|x| x.id == "r1").unwrap().state, RunState::Draft);
+    }
+
+    #[tokio::test]
+    async fn set_state_visible_through_get_run() {
+        let store = open_temp().await;
+        let mut r = mk_run("r1");
+        store.insert_run(&r).await.unwrap();
+        store
+            .set_state(&mut r, RunState::ContractReady, None)
+            .await
+            .unwrap();
+        let got = store.get_run("r1").await.unwrap();
+        assert_eq!(got.state, RunState::ContractReady);
+    }
+
+    #[tokio::test]
+    async fn work_unit_insert_get_roundtrip() {
+        let store = open_temp().await;
+        let run = mk_run("r1");
+        store.insert_run(&run).await.unwrap();
+        let u = mk_unit("u1", "r1");
+        store.insert_work_unit(&u).await.unwrap();
+        let got = store.get_work_unit("u1").await.unwrap();
+        assert_eq!(got.id, "u1");
+        assert_eq!(got.title, "implement mul");
+        assert_eq!(got.state, WorkUnitState::Queued);
+        let for_run = store.work_units_for_run("r1").await.unwrap();
+        assert_eq!(for_run.len(), 1);
+        assert_eq!(for_run[0].id, "u1");
+        assert_eq!(for_run[0].instruction, "write the function");
+    }
+
+    #[tokio::test]
+    async fn latest_verdict_returns_newest() {
+        let store = open_temp().await;
+        let older = mk_verdict("v1", "u1", "first pass failed", "2026-01-01T00:00:00Z");
+        let newer = mk_verdict("v2", "u1", "second pass accepted", "2026-01-02T00:00:00Z");
+        store.insert_verdict(&older).await.unwrap();
+        store.insert_verdict(&newer).await.unwrap();
+        let latest = store.latest_verdict("u1").await.unwrap().unwrap();
+        assert_eq!(latest.id, "v2");
+        assert_eq!(latest.reason, "second pass accepted");
+        assert_eq!(latest.created_at, "2026-01-02T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn get_run_unknown_id_is_error_not_panic() {
+        let store = open_temp().await;
+        let err = store.get_run("does-not-exist").await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::RunNotFound);
+    }
+}
