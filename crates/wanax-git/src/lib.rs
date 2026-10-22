@@ -364,4 +364,79 @@ mod tests {
         let d = dirty_non_wanax(repo.path()).unwrap();
         assert_eq!(d, vec!["dirty.txt".to_string()]);
     }
+
+    #[test]
+    fn create_branch_ref_exists() {
+        let repo = init_repo();
+        let sha = head_sha(repo.path()).unwrap();
+        create_branch(repo.path(), "feature", &sha).unwrap();
+        assert!(ref_exists(repo.path(), "feature"));
+        assert!(!ref_exists(repo.path(), "no-such-ref"));
+    }
+
+    #[test]
+    fn worktree_add_remove_cycle() {
+        let repo = init_repo();
+        let sha = head_sha(repo.path()).unwrap();
+        create_branch(repo.path(), "wt", &sha).unwrap();
+        let wt = repo.path().join("linked");
+        worktree_add_branch(repo.path(), &wt, "wt").unwrap();
+        assert!(wt.is_dir());
+        worktree_remove_force(repo.path(), &wt).unwrap();
+        assert!(!wt.exists());
+    }
+
+    #[test]
+    fn commit_cleans_tree_and_moves_head() {
+        let repo = init_repo();
+        let before = head_sha(repo.path()).unwrap();
+        fs::write(repo.path().join("added.txt"), "body").unwrap();
+        add_files(repo.path(), &["added.txt".to_string()]).unwrap();
+        let after = commit(repo.path(), "add added.txt").unwrap();
+        assert!(status_paths(repo.path()).unwrap().is_empty());
+        assert_ne!(before, after);
+        assert_eq!(after, head_sha(repo.path()).unwrap());
+    }
+
+    #[test]
+    fn diff_trio_mentions_added_path() {
+        let repo = init_repo();
+        let first = head_sha(repo.path()).unwrap();
+        fs::write(repo.path().join("note.txt"), "note").unwrap();
+        add_files(repo.path(), &["note.txt".to_string()]).unwrap();
+        let second = commit(repo.path(), "add note").unwrap();
+        let names = diff_name_only(repo.path(), &first, &second).unwrap();
+        assert!(names.iter().any(|p| p == "note.txt"));
+        assert!(diff_stat(repo.path(), &first, &second)
+            .unwrap()
+            .contains("note.txt"));
+        assert!(diff_patch(repo.path(), &first, &second)
+            .unwrap()
+            .contains("note.txt"));
+    }
+
+    #[test]
+    fn ancestry_is_directional() {
+        let repo = init_repo();
+        let first = head_sha(repo.path()).unwrap();
+        fs::write(repo.path().join("second.txt"), "2").unwrap();
+        add_files(repo.path(), &["second.txt".to_string()]).unwrap();
+        let second = commit(repo.path(), "second").unwrap();
+        assert!(is_ancestor(repo.path(), &first, &second).unwrap());
+        assert!(!is_ancestor(repo.path(), &second, &first).unwrap());
+    }
+
+    #[test]
+    fn reset_branch_moves_ref_to_earlier_sha() {
+        let repo = init_repo();
+        let first = head_sha(repo.path()).unwrap();
+        create_branch(repo.path(), "movable", &first).unwrap();
+        fs::write(repo.path().join("later.txt"), "later").unwrap();
+        add_files(repo.path(), &["later.txt".to_string()]).unwrap();
+        let later = commit(repo.path(), "later").unwrap();
+        assert_ne!(first, later);
+        reset_branch(repo.path(), "movable", &first).unwrap();
+        checkout_branch(repo.path(), "movable").unwrap();
+        assert_eq!(head_sha(repo.path()).unwrap(), first);
+    }
 }
