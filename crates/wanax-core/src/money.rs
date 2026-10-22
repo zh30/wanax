@@ -90,4 +90,41 @@ mod tests {
             10_000_000
         );
     }
+
+    #[test]
+    fn parse_rejects_negative_and_malformed() {
+        assert_eq!(parse_usd_decimal("").unwrap_err(), "empty usd amount");
+        assert_eq!(
+            parse_usd_decimal("a.5").unwrap_err(),
+            "invalid usd amount a.5"
+        );
+        assert_eq!(
+            parse_usd_decimal("1.x").unwrap_err(),
+            "invalid usd fraction 1.x"
+        );
+        assert_eq!(
+            parse_usd_decimal("1.1234567").unwrap_err(),
+            "usd precision exceeds micros"
+        );
+        // Leading '-' is accepted and stored as negative micros, not rejected.
+        assert_eq!(parse_usd_decimal("-1.5").unwrap(), -1_500_000);
+    }
+
+    #[test]
+    fn format_usd_negative_keeps_six_fraction_digits() {
+        assert_eq!(format_usd(-2_500_000), "-2.500000");
+    }
+
+    #[test]
+    fn format_usd_4_truncates_to_four_fraction_digits() {
+        assert_eq!(format_usd_4(5_000_000), "5.0000");
+        assert_eq!(format_usd_4(65_000), "0.0650");
+    }
+
+    #[test]
+    fn estimate_cost_micros_rounds_each_side_down() {
+        // 1 char * 1_500_000 micros/1M = 1.5 → 1; 2 chars * 2_500_000 = 5 exactly.
+        // Per-side truncating division drops the 0.5 before the sides are added.
+        assert_eq!(estimate_cost_micros(1, 2, 1_500_000, 2_500_000), 6);
+    }
 }
