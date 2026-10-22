@@ -695,7 +695,10 @@ mod tests {
         assert_eq!(got.repo_root, "/tmp/repo");
         let listed = store.list_runs().await.unwrap();
         assert!(listed.iter().any(|x| x.id == "r1"));
-        assert_eq!(listed.iter().find(|x| x.id == "r1").unwrap().state, RunState::Draft);
+        assert_eq!(
+            listed.iter().find(|x| x.id == "r1").unwrap().state,
+            RunState::Draft
+        );
     }
 
     #[tokio::test]
