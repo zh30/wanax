@@ -131,8 +131,15 @@ mod tests {
 
     #[test]
     fn is_forbidden_allows_benign_names() {
+        // Exact match only: `is_forbidden` is case-sensitive and does not
+        // substring-match. These names are absent from `FORBIDDEN_ENV`.
+        assert!(!FORBIDDEN_ENV.contains(&"PATH"));
+        assert!(!FORBIDDEN_ENV.contains(&"HOME"));
+        assert!(!FORBIDDEN_ENV.contains(&"SOME_AGENT_API_KEY"));
         assert!(!is_forbidden("PATH"));
         assert!(!is_forbidden("HOME"));
-        assert!(!is_forbidden("ANTHROPIC_API_KEY"));
+        assert!(!is_forbidden("SOME_AGENT_API_KEY"));
+        // Case differs from the listed `GH_TOKEN`, so it is not forbidden.
+        assert!(!is_forbidden("gh_token"));
     }
 }
