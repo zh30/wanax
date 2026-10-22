@@ -248,9 +248,19 @@ pub fn run_test_command(
         .current_dir(cwd)
         .env_clear()
         .envs(env)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .env("GIT_TERMINAL_PROMPT", "0");
+    if matches!(
+        sandbox_spec.map(|s| s.backend),
+        Some(wanax_core::sandbox::SandboxBackend::Seatbelt)
+            | Some(wanax_core::sandbox::SandboxBackend::Bwrap)
+    ) {
+        // Nested confinement cannot apply (sandbox-exec refuses a second
+        // profile; bwrap cannot re-namespace). The marker tells any wanax
+        // spawned deeper in this process tree to skip its own sandbox —
+        // this layer's confinement still holds.
+        command.env(wanax_core::sandbox::SANDBOXED_ENV, "1");
+    }
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

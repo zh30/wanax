@@ -100,7 +100,15 @@ fn bin_on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
+/// Set by wanax itself on every confined child. A nested wanax inheriting
+/// this marker skips its own sandbox layer — sandbox-exec/bwrap cannot
+/// compose, and the parent's confinement already covers the whole tree.
+pub const SANDBOXED_ENV: &str = "WANAX_SANDBOXED";
+
 pub fn detect_backend(mode: &str) -> SandboxBackend {
+    if std::env::var_os(SANDBOXED_ENV).is_some() {
+        return SandboxBackend::None;
+    }
     match mode.trim() {
         "off" | "none" => SandboxBackend::None,
         "seatbelt" => SandboxBackend::Seatbelt,
@@ -306,6 +314,14 @@ pub fn wrap(
             Ok((bin, argv))
         }
     }
+}
+
+#[test]
+fn detect_backend_yields_none_when_nested() {
+    std::env::set_var(SANDBOXED_ENV, "1");
+    assert_eq!(detect_backend("auto"), SandboxBackend::None);
+    assert_eq!(detect_backend("seatbelt"), SandboxBackend::None);
+    std::env::remove_var(SANDBOXED_ENV);
 }
 
 #[cfg(test)]

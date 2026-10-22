@@ -83,6 +83,16 @@ pub fn sanitized_env(ctx: &WorkerContext) -> HashMap<String, String> {
     env.insert("WANAX_RUN_ID".into(), ctx.run_id.clone());
     env.insert("WANAX_WORK_UNIT_ID".into(), ctx.work_unit_id.clone());
     env.insert("WANAX_TEST_COMMAND".into(), ctx.test_command.clone());
+    // Confined children carry a marker so any wanax they spawn (self-dogfood:
+    // the test suite drives nested factory runs) skips its own sandbox —
+    // nesting can't compose and the parent's confinement already holds.
+    if matches!(
+        ctx.sandbox.as_ref().map(|s| s.backend),
+        Some(wanax_core::sandbox::SandboxBackend::Seatbelt)
+            | Some(wanax_core::sandbox::SandboxBackend::Bwrap)
+    ) {
+        env.insert(wanax_core::sandbox::SANDBOXED_ENV.to_string(), "1".into());
+    }
     envenv::with_passthrough(&mut env, &ctx.pass_env);
     if let Some(p) = &ctx.proxy_url {
         for (k, v) in wanax_core::egress::proxy_env_from_url(p) {
