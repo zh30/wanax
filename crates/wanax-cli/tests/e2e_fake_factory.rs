@@ -1925,6 +1925,36 @@ fn bound_test_blocks_vacuous_accept() {
     );
 }
 
+/// doctor reports pass_env resolution: present/absent/forbidden counts,
+/// and probes the data dir for writability.
+#[test]
+fn doctor_reports_pass_env_and_data_dir() {
+    let h = Harness::new();
+    h.set_adapter_fake();
+    let p = h.path().join(".wanax/config.toml");
+    let mut t = fs::read_to_string(&p).unwrap();
+    t = t.replace(
+        "adapter = \"fake\"",
+        "adapter = \"fake\"\npass_env = [\"MY_AGENT_KEY\", \"MISSING_ENV\", \"GH_TOKEN\"]",
+    );
+    fs::write(&p, t).unwrap();
+    std::env::set_var("MY_AGENT_KEY", "x");
+    let out = h.run(&["doctor"], 0);
+    std::env::remove_var("MY_AGENT_KEY");
+    assert!(out.stdout.contains("data_dir"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("worker.pass_env: 1 present"),
+        "{}",
+        out.stdout
+    );
+    assert!(out.stdout.contains("absent: MISSING_ENV"), "{}", out.stdout);
+    assert!(
+        out.stdout.contains("blocked(forbidden): GH_TOKEN"),
+        "{}",
+        out.stdout
+    );
+}
+
 /// wanax.log is a real run activity log: lifecycle lines land there
 /// (run started, worker spawn, gates, verdict, terminal state).
 #[test]
