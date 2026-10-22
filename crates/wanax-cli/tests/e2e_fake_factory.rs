@@ -2472,6 +2472,11 @@ fn export_bundles_tombstone_diff_and_manifest() {
     assert_eq!(manifest["state"], "accepted");
     assert_eq!(manifest["verdicts"], serde_json::json!(["accept"]));
     assert!(manifest["inner_diff"].as_bool().unwrap());
+    // The bundle is self-verifying: every exported file carries a sha256.
+    let hashes = manifest["sha256"].as_object().unwrap();
+    assert_eq!(hashes.len(), manifest["files"].as_array().unwrap().len());
+    let env_sha = wanax_core::hashutil::sha256_file(&dir.join("envelope.json")).unwrap();
+    assert_eq!(hashes["envelope.json"], env_sha);
 }
 
 /// ACP adapter: an NDJSON-RPC stub agent drives initialize → session/new →

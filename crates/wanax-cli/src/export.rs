@@ -82,6 +82,25 @@ pub async fn run(opts: ExportOpts) -> Result<(), WanaxError> {
         &mut files,
     );
 
+    // Prompt artifacts — the model inputs the budget ticks hash-anchor.
+    // Without them the exported audit trail can't answer "what did the
+    // commander/inner model actually see".
+    let prompts_dir = repo
+        .join(".wanax")
+        .join("runs")
+        .join(&opts.run_id)
+        .join("prompts");
+    if prompts_dir.is_dir() {
+        let _ = std::fs::create_dir_all(out_dir.join("prompts"));
+        if let Ok(rd) = std::fs::read_dir(&prompts_dir) {
+            for ent in rd.flatten() {
+                if let Some(name) = ent.file_name().to_str() {
+                    copy(&ent.path(), &format!("prompts/{name}"), &mut files);
+                }
+            }
+        }
+    }
+
     let env = load_envelope(&repo, &opts.run_id).ok();
     let verdicts: Vec<String> = env
         .as_ref()
@@ -98,7 +117,7 @@ pub async fn run(opts: ExportOpts) -> Result<(), WanaxError> {
                 .collect()
         })
         .unwrap_or_default();
-    let manifest = json!({
+    let mut manifest = json!({
         "run_id": run.id,
         "exported_at": wanax_core::timeutil::now_rfc3339(),
         "state": run.state.as_str(),
@@ -112,6 +131,17 @@ pub async fn run(opts: ExportOpts) -> Result<(), WanaxError> {
         "inner_diff": inner_included,
         "files": files,
     });
+    // Every file in the bundle gets a sha so the export is self-verifying
+    // without trusting the path that produced it.
+    let mut hashes = serde_json::Map::new();
+    for f in manifest["files"].as_array().unwrap_or(&vec![]) {
+        if let Some(name) = f.as_str() {
+            if let Ok(h) = wanax_core::hashutil::sha256_file(&out_dir.join(name)) {
+                hashes.insert(name.to_string(), json!(h));
+            }
+        }
+    }
+    manifest["sha256"] = json!(hashes);
     std::fs::write(
         out_dir.join("manifest.json"),
         serde_json::to_string_pretty(&manifest).unwrap_or_default(),
