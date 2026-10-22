@@ -356,10 +356,145 @@ pub fn peer_branch_name(run_id: &str, seq: u32) -> String {
 mod tests {
     use super::*;
 
+    fn all_run_states() -> [RunState; 14] {
+        [
+            RunState::Draft,
+            RunState::ContractReady,
+            RunState::Dispatched,
+            RunState::InnerWorking,
+            RunState::ReceiptReady,
+            RunState::OuterReviewing,
+            RunState::Accepted,
+            RunState::Rejected,
+            RunState::Rework,
+            RunState::Escalate,
+            RunState::Canceling,
+            RunState::Cancelled,
+            RunState::BudgetExhausted,
+            RunState::Failed,
+        ]
+    }
+
     #[test]
     fn rework_is_not_terminal() {
         assert!(!RunState::Rework.is_terminal());
         assert!(RunState::Escalate.is_terminal());
         assert!(RunState::Accepted.is_terminal());
+    }
+
+    #[test]
+    fn run_state_parse_roundtrip() {
+        for state in all_run_states() {
+            assert_eq!(RunState::parse(state.as_str()), Some(state));
+        }
+        assert_eq!(RunState::parse(""), None);
+        assert_eq!(RunState::parse("nope"), None);
+        // parse matches the snake_case encoding exactly; case variants miss.
+        assert_eq!(RunState::parse("DRAFT"), None);
+        assert_eq!(RunState::parse("Draft"), None);
+    }
+
+    #[test]
+    fn run_state_is_terminal_exhaustive() {
+        // Terminal set from `RunState::is_terminal`: accepted, rejected,
+        // cancelled, budget_exhausted, failed, escalate. `rework` and the
+        // in-flight `canceling` state are not terminal.
+        let cases = [
+            (RunState::Draft, false),
+            (RunState::ContractReady, false),
+            (RunState::Dispatched, false),
+            (RunState::InnerWorking, false),
+            (RunState::ReceiptReady, false),
+            (RunState::OuterReviewing, false),
+            (RunState::Accepted, true),
+            (RunState::Rejected, true),
+            (RunState::Rework, false),
+            (RunState::Escalate, true),
+            (RunState::Canceling, false),
+            (RunState::Cancelled, true),
+            (RunState::BudgetExhausted, true),
+            (RunState::Failed, true),
+        ];
+        assert_eq!(cases.len(), all_run_states().len());
+        for (state, terminal) in cases {
+            assert_eq!(
+                state.is_terminal(),
+                terminal,
+                "{} terminal mismatch",
+                state.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn work_unit_state_parse_roundtrip() {
+        let all = [
+            WorkUnitState::Queued,
+            WorkUnitState::Assigned,
+            WorkUnitState::Implementing,
+            WorkUnitState::SelfVerifying,
+            WorkUnitState::ReceiptReady,
+            WorkUnitState::OuterTesting,
+            WorkUnitState::Accepted,
+            WorkUnitState::Rejected,
+            WorkUnitState::Blocked,
+        ];
+        for state in all {
+            assert_eq!(WorkUnitState::parse(state.as_str()), Some(state));
+        }
+        assert_eq!(WorkUnitState::parse("nope"), None);
+    }
+
+    #[test]
+    fn worker_adapter_kind_parse_and_supported() {
+        let all = [
+            WorkerAdapterKind::Octoscode,
+            WorkerAdapterKind::Fake,
+            WorkerAdapterKind::Cmd,
+            WorkerAdapterKind::Claude,
+            WorkerAdapterKind::Codex,
+            WorkerAdapterKind::Acp,
+        ];
+        for kind in all {
+            assert_eq!(WorkerAdapterKind::parse(kind.as_str()), Some(kind));
+            // `is_supported` matches every current variant, including octoscode.
+            assert!(kind.is_supported(), "{}", kind.as_str());
+        }
+        assert_eq!(WorkerAdapterKind::parse("not_a_kind"), None);
+        assert_eq!(WorkerAdapterKind::parse(""), None);
+    }
+
+    #[test]
+    fn verdict_decision_parse_roundtrip() {
+        let all = [
+            VerdictDecision::Accept,
+            VerdictDecision::Reject,
+            VerdictDecision::Rework,
+            VerdictDecision::Escalate,
+        ];
+        for decision in all {
+            assert_eq!(VerdictDecision::parse(decision.as_str()), Some(decision));
+        }
+        assert_eq!(VerdictDecision::parse("accepted"), None);
+    }
+
+    #[test]
+    fn assignee_role_parse_roundtrip() {
+        let all = [AssigneeRole::Master, AssigneeRole::Goal, AssigneeRole::Peer];
+        for role in all {
+            assert_eq!(AssigneeRole::parse(role.as_str()), Some(role));
+        }
+        assert_eq!(AssigneeRole::parse("worker"), None);
+    }
+
+    #[test]
+    fn inner_and_outer_branch_names_embed_run_id() {
+        let run_id = "wx_01M5HFJB29MR7QWJ2AV9HDSVPN";
+        let inner = inner_branch_name(run_id);
+        let outer = outer_branch_name(run_id);
+        assert!(inner.contains(run_id));
+        assert!(outer.contains(run_id));
+        assert_eq!(inner, "wanax/wx_01M5HFJB29MR7QWJ2AV9HDSVPN/inner");
+        assert_eq!(outer, "wanax/wx_01M5HFJB29MR7QWJ2AV9HDSVPN/outer");
     }
 }
