@@ -185,6 +185,52 @@ pub async fn run(fix_lock: bool, strict: bool, data_dir: &Path) -> Result<(), Wa
         }
     );
 
+    // Same probe for the data dir — runs write envelopes + sqlite there.
+    let dprobe = data_dir.join(".doctor_write");
+    let dwritable = (|| {
+        std::fs::create_dir_all(data_dir)?;
+        std::fs::write(&dprobe, b"ok")?;
+        std::fs::remove_file(&dprobe)?;
+        std::io::Result::Ok(())
+    })()
+    .is_ok();
+    println!(
+        "data_dir {}: {}",
+        data_dir.display(),
+        if dwritable {
+            "writable"
+        } else {
+            "NOT writable"
+        }
+    );
+
+    // [worker] pass_env names that resolve to nothing are silent no-ops —
+    // surface them; FORBIDDEN names get rejected by the passthrough anyway.
+    if let Some(cfg) = &cfg {
+        if !cfg.file.worker.pass_env.is_empty() {
+            let mut present = Vec::new();
+            let mut absent = Vec::new();
+            let mut forbidden = Vec::new();
+            for k in &cfg.file.worker.pass_env {
+                if wanax_core::envenv::is_forbidden(k) {
+                    forbidden.push(k.as_str());
+                } else if std::env::var(k).is_ok() {
+                    present.push(k.as_str());
+                } else {
+                    absent.push(k.as_str());
+                }
+            }
+            let mut line = format!("worker.pass_env: {} present", present.len());
+            if !absent.is_empty() {
+                line.push_str(&format!(", WARN absent: {}", absent.join(", ")));
+            }
+            if !forbidden.is_empty() {
+                line.push_str(&format!(", blocked(forbidden): {}", forbidden.join(", ")));
+            }
+            println!("{line}");
+        }
+    }
+
     let tests_writable = scan_writable_test_contracts(&cwd);
     if tests_writable.is_empty() {
         println!("{}", crate::i18n::t("contracts_ok"));

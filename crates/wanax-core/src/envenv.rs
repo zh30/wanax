@@ -67,6 +67,11 @@ pub fn env_has_forbidden(env: &HashMap<String, String>) -> bool {
     FORBIDDEN_ENV.iter().any(|k| env.contains_key(*k))
 }
 
+/// Is this name on the never-pass list (wanax's own secrets, git creds, ssh)?
+pub fn is_forbidden(name: &str) -> bool {
+    FORBIDDEN_ENV.contains(&name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
