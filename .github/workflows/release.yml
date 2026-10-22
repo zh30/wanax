@@ -1,0 +1,61 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build wanax (${{ matrix.triple }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+          - triple: aarch64-apple-darwin
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          targets: ${{ matrix.triple }}
+      - run: rustc --version
+      - name: Build release binary
+        run: cargo build --locked --release -p wanax-cli --target ${{ matrix.triple }}
+      - name: Package
+        run: |
+          mkdir -p dist
+          BIN=target/${{ matrix.triple }}/release/wanax
+          if [ ! -f "$BIN" ]; then BIN="${BIN}.exe"; fi
+          cp "$BIN" dist/wanax-${{ matrix.triple }}
+          chmod +x dist/wanax-${{ matrix.triple }}
+          shasum -a 256 dist/wanax-${{ matrix.triple }} > dist/wanax-${{ matrix.triple }}.sha256
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/wanax-${{ matrix.triple }}
+            dist/wanax-${{ matrix.triple }}.sha256
+          tag_name: ${{ github.ref_name }}
+          name: Wanax ${{ github.ref_name }}
+          body: |
+            ## Wanax ${{ github.ref_name }}
+
+            Spec in → mechanical verification → local branch out.
+
+            Install (replace TRIPLE with `x86_64-unknown-linux-gnu` or `aarch64-apple-darwin`):
+
+            ```bash
+            TRIPLE=x86_64-unknown-linux-gnu
+            curl -LO https://github.com/zh30/wanax/releases/download/${{ github.ref_name }}/wanax-$TRIPLE
+            curl -LO https://github.com/zh30/wanax/releases/download/${{ github.ref_name }}/wanax-$TRIPLE.sha256
+            shasum -a 256 -c wanax-$TRIPLE.sha256
+            chmod +x wanax-$TRIPLE && sudo mv wanax-$TRIPLE /usr/local/bin/wanax
+            ```
+          draft: false
+          prerelease: false
