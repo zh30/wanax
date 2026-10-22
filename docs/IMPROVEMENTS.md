@@ -182,6 +182,7 @@ extra_write_paths = []   # 额外可写目录（用户工具链缓存等）
 | R-36 | commander 输入 prompt 审计 | `LlmUsage.prompt_in` 记模型输入（system+user），`charge_and_tick` 落成 `.wanax/runs/<id>/prompts/<label>-<n>.txt` artifact，`prompt_sha256`+path 写进 budget_tick——证据包进 dispatch 的内容现在可审计（之前 raw_json 只记输出，输入永不落盘） | ✅ 已实现+测试 |
 | R-35 | `wanax watch` | 轮询 run 到终态：0=accepted、1=其他终态、`--timeout-secs` 限时——观测三角收口（status=当下、notify=钩子、watch=人） | ✅ 已实现+测试 |
 | R-34 | `wanax diff` | run 的 inner 分支 diff——stat 默认，`--patch` 完整补丁；不用等 export 就能看产出 | ✅ 已实现+测试 |
+| R-40 | 自举 dogfood（wanax 开发 wanax） | self-contract + opus commander + claude CLI worker：嵌套沙箱 bug 被抓（sandbox-exec 不可复合 → WANAX_SANDBOXED 标记跳过第二层，#40）；commander 语义 rework 抓出 worker 孤儿文件作弊（写了没人 mod 的新 envenv.rs）；最终 accepted，inner 分支真实新增 is_forbidden 测试，38 事件 audit OK，$1.66/21 turns | ✅ 已验证，产出已进 main |
 | R-33 | 真模型 dogfood（含失败弧） | OpenRouter 通道（opus commander + glm worker via cmd adapter）：真 dispatch → seatbelt worktree 真写 → 真 cargo test → bound/must/边界全门 → 真 verdict accept → audit/replay/export 全绿；`improve --from` 父链真实工作。不可能契约 4 轮真跑：bound gate 压过绿测强制 rework→escalate；证据包改变 worker 行为（iter4 写 REPORT.md 出界被边界门拒）；E_REWORK_LIMIT 收尾——签名早停因真实证据差异正确静默。抓出 check 对创建型 bound_test 误杀的设计 bug（已修） | ✅ 已验证 |
 | R-32 | `status --json` + doctor acp | status 出 JSON（列表/单 run 带 units）；doctor 补 acp adapter 的 acp_bin 解析（之前落进 octoscode 兜底误报） | ✅ 已实现+测试 |
 | R-31 | `wanax replay` 对账面 | envelope 重放成 unit 状态 + 字段级 diff 对 `work_units` 缓存——resume 内部用的那份真相现在人也能看；`--json` 全量导出 | ✅ 已实现+测试 |
