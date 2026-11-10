@@ -10,7 +10,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest]
+        # macOS dropped 2026-11-10 to cut Actions cost. Linux already runs
+        # fmt/build/test/clippy and the release-size check. Darwin binaries
+        # are built by release.yml on v* tags.
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
